@@ -1,0 +1,123 @@
+{
+  "candidate_id": "123",
+  "candidate_name": "John Doe",
+  "created_at": "2023-10-26 00:00:00+00:00",
+  "updated_at": "2023-10-26 00:00:00+00:00",
+  "prefix": null,
+  "full_name": "John Doe",
+  "first_name": null,
+  "middle_name": null,
+  "last_name": null,
+  "suffix": null,
+  "city_name": null,
+  "county_name": null,
+  "state_name": null,
+  "geo_coordinates": null,
+  "postal_code": null,
+  "street_address": null,
+  "telephones": [],
+  "email_addresses": [],
+  "web_addresses": [],
+  "work_history": [],
+  "education": [
+    {
+      "level": "Doctorate",
+      "degree_type": "Ph.D. in Statistics",
+      "subject": "Statistics",
+      "start_date": "2014-09-01",
+      "end_date": "2018-08-01",
+      "institution": "Cornell University",
+      "gpa": null,
+      "summary": null
+    },
+    {
+      "level": "Master\u2019s",
+      "degree_type": "Master of Science in Applied Mathematics",
+      "subject": "Applied Mathematics",
+      "start_date": "2012-09-01",
+      "end_date": "2014-05-01",
+      "institution": "University of Michigan",
+      "gpa": null,
+      "summary": null
+    },
+    {
+      "level": "Bachelor\u2019s",
+      "degree_type": "Bachelor of Science in Computer Science",
+      "subject": "Computer Science",
+      "start_date": "2008-09-01",
+      "end_date": "2012-05-01",
+      "institution": "University of California, Berkeley",
+      "gpa": null,
+      "summary": null
+    }
+  ],
+  "skills": [
+    {
+      "name": "Python",
+      "category": "Programming Language",
+      "level": "Expert"
+    },
+    {
+      "name": "R",
+      "category": "Programming Language",
+      "level": "Expert"
+    },
+    {
+      "name": "TensorFlow",
+      "category": "Machine Learning",
+      "level": "Expert"
+    },
+    {
+      "name": "PyTorch",
+      "category": "Machine Learning",
+      "level": "Expert"
+    },
+    {
+      "name": "SQL",
+      "category": "Database",
+      "level": "Expert"
+    },
+    {
+      "name": "Big Data",
+      "category": "Data Science",
+      "level": "Expert"
+    },
+    {
+      "name": "Machine Learning",
+      "category": "Machine Learning",
+      "level": "Expert"
+    },
+    {
+      "name": "Deep Learning",
+      "category": "Machine Learning",
+      "level": "Expert"
+    },
+    {
+      "name": "Statistics",
+      "category": "Statistics",
+      "level": "Expert"
+    }
+  ],
+  "certifications": [
+    {
+      "certification": "Google Cloud Professional Data Engineer",
+      "certification_group": null,
+      "certification_family": null,
+      "issued_by": "Google",
+      "issue_date": "2020-05-01",
+      "expiry_date": null,
+      "cert_id": null,
+      "url": null
+    },
+    {
+      "certification": "Microsoft Certified: Azure Data Scientist Associate",
+      "certification_group": null,
+      "certification_family": null,
+      "issued_by": "Microsoft",
+      "issue_date": "2019-11-01",
+      "expiry_date": null,
+      "cert_id": null,
+      "url": null
+    }
+  ]
+}
