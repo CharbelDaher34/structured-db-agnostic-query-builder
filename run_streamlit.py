@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 def main():
-    """Run the Streamlit app."""
+    """Run the Streamligt app."""
     script_path = Path(__file__).parent / "streamlit_viewer.py"
     
     try:
