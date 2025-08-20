@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import time
 from datetime import datetime, date
@@ -14,7 +15,8 @@ from pydantic import BaseModel, Field, create_model, field_validator, model_vali
 
 import time
 import asyncio
-
+from dotenv import load_dotenv
+load_dotenv()
 
 class ModelBuilder:
     """Builds Pydantic models from Elasticsearch mappings, with or without a database connection."""
@@ -1017,7 +1019,7 @@ class ElasticsearchModelGenerator:
     def __init__(
         self,
         index_name: str,
-        es_host: str = "http://elastic:rvs59tB_VVANUy4rC-kd@84.16.230.94:9200",
+        es_host: str,
         fields_to_ignore: List[str] = [],
         category_fields: List[str] = [],
         model_name: str = "",
@@ -1273,7 +1275,10 @@ def AppendQueriesToJson(queries: list[str], filename: str = "queries.json") -> N
     Append queries with their filters and elastic queries to JSON file using async processing.
     Skips existing queries and executes new ones to check if they work.
     """
+    print(os.getenv("elastic_host", "http://localhost:9200"))
+    time.sleep(5)
     client = ElasticsearchModelGenerator(
+        es_host=os.getenv("elastic_host", "http://localhost:9200"),
         index_name="user_transactions",
         category_fields=[
             "card_kind",
