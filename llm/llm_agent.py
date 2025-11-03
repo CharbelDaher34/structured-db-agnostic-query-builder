@@ -22,7 +22,7 @@ class LLM:
     def __init__(
         self,
         system_prompt: str,
-        result_type: type[BaseModel],
+        output_type: type[BaseModel],
         model_settings: dict = {"temperature": 0.2, "top_p": 0.95},
         api_key: str = "",
         model: str = "gemini-2.0-flash",
@@ -43,12 +43,12 @@ class LLM:
 
         self.model_settings = model_settings
 
-        self.result_type = result_type
+        self.output_type = output_type
         # Initialize the agent with Candidate as the result type
-        if self.result_type:
+        if self.output_type:
             self.llm_agent = agent(
                 model=model,
-                result_type=self.result_type,
+                output_type=self.output_type,
                 system_prompt=system_prompt,
                 api_key=self.api_key,
                 model_settings=self.model_settings,
@@ -243,6 +243,6 @@ class LLM:
                     payload.extend(self._render_pdf_pages_as_images(item))
                 else:
                     payload.append(item)
-            batch_inputs.append((payload, self.result_type))
+            batch_inputs.append((payload, self.output_type))
         results = await self.llm_agent.batch(batch_inputs)
         return results

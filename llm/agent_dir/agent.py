@@ -16,7 +16,7 @@ class agent:
         self,
         model: str,
         system_prompt: str="",
-        result_type: Optional[type[BaseModel]] = None,
+        output_type: Optional[type[BaseModel]] = None,
         api_key: str="",
         name: Optional[str] = None,
         model_settings: Optional[Dict[str, Any]] = {"temperature": 0.2, "top_p": 0.95},
@@ -24,7 +24,7 @@ class agent:
         tools: Optional[List[Any]] = None,
     ):
         self.model = model
-        self.result_type = result_type
+        self.output_type = output_type
         self.system_prompt = system_prompt
         self.name = name
         self.model_settings = model_settings
@@ -63,10 +63,10 @@ class agent:
         else:
             os.environ["OPENAI_API_KEY"] = api_key
 
-    async def run(self, payload, result_type: Optional[type[BaseModel]] = None):
+    async def run(self, payload, output_type: Optional[type[BaseModel]] = None):
         agent = Agent(
             model=self.model,
-            result_type=result_type or self.result_type or None,  # type: ignore[arg-type]
+            output_type=output_type or self.output_type or None,  # type: ignore[arg-type]
             system_prompt=self.system_prompt,
             name=self.name,
             model_settings=self.model_settings or None,  # type: ignore[arg-type]
@@ -119,7 +119,7 @@ class agent:
     #     """Run the agent with streaming response"""
     #     agent = Agent(
     #         model=self.model,
-    #         result_type=self.result_type,
+    #         output_type=self.output_type,
     #         system_prompt=self.system_prompt,
     #         name=self.name,
     #         model_settings=self.model_settings,
@@ -149,7 +149,7 @@ class agent:
             """Run the agent synchronously"""
             agent = Agent(
                 model=self.model,
-                result_type=self.result_type,  # type: ignore[arg-type]
+                output_type=self.output_type,  # type: ignore[arg-type]
                 system_prompt=self.system_prompt,
                 name=self.name,
                 model_settings=self.model_settings,  # type: ignore[arg-type]
@@ -188,11 +188,11 @@ class agent:
     async def batch(self, batch_inputs: list[tuple[list[Any], BaseModel]]):
         agent_instance = self
 
-        async def run_single(payload, result_type):
-            return await agent_instance.run(payload, result_type)
+        async def run_single(payload, output_type):
+            return await agent_instance.run(payload, output_type)
 
         tasks = [
-            run_single(payload, result_type) for payload, result_type in batch_inputs
+            run_single(payload, output_type) for payload, output_type in batch_inputs
         ]
         results = await asyncio.gather(*tasks)
         return results

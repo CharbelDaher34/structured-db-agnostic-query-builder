@@ -1,0 +1,524 @@
+[
+  {
+    "timestamp": "2025-11-03T09:52:47.357901",
+    "input": "Can you show me all my transactions from April 2024?",
+    "filter": {
+      "filters": [
+        {
+          "conditions": [
+            {
+              "field": "transaction.timestamp",
+              "operator": "between",
+              "value": [
+                "2024-04-01",
+                "2024-04-30"
+              ]
+            }
+          ],
+          "sort": null,
+          "limit": null,
+          "group_by": null,
+          "aggregations": null,
+          "interval": null
+        }
+      ]
+    },
+    "elastic_query": [
+      {
+        "query": {
+          "bool": {
+            "must": [
+              {
+                "range": {
+                  "transaction.timestamp": {
+                    "gte": "2024-04-01",
+                    "lte": "2024-04-30"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "size": null
+      }
+    ],
+    "execution_results": [
+      {
+        "total_hits": 16,
+        "documents": [
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-02T09:54:00",
+              "type": "Deposit",
+              "amount": 4000.0,
+              "currency": "USD",
+              "receiver": {
+                "name": "Eurisko",
+                "category_type": "Income",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-27T19:36:00",
+              "type": "Withdraw",
+              "amount": 232.33,
+              "currency": "USD",
+              "receiver": {
+                "name": "Pellini",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-13T23:42:00",
+              "type": "Withdraw",
+              "amount": 38.54,
+              "currency": "USD",
+              "receiver": {
+                "name": "Fresh Frutz",
+                "category_type": "Retail",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-02T23:54:00",
+              "type": "Withdraw",
+              "amount": 25.2,
+              "currency": "USD",
+              "receiver": {
+                "name": "Open AI",
+                "category_type": "Subscription",
+                "location": "Online"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-08T00:32:00",
+              "type": "Withdraw",
+              "amount": 15.0,
+              "currency": "USD",
+              "receiver": {
+                "name": "Starbucks",
+                "category_type": "Cafe",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-28T00:32:00",
+              "type": "Withdraw",
+              "amount": 8.0,
+              "currency": "USD",
+              "receiver": {
+                "name": "Starbucks",
+                "category_type": "Cafe",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-10T17:44:00",
+              "type": "Withdraw",
+              "amount": 139.8,
+              "currency": "USD",
+              "receiver": {
+                "name": "Chris Van-tastic Garage",
+                "category_type": "Automotive",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-19T13:50:00",
+              "type": "Withdraw",
+              "amount": 98.93,
+              "currency": "USD",
+              "receiver": {
+                "name": "L'Abeille D'Or",
+                "category_type": "Restaurant",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-06T14:11:00",
+              "type": "Withdraw",
+              "amount": 26.61,
+              "currency": "USD",
+              "receiver": {
+                "name": "Chili's",
+                "category_type": "Restaurant",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-19T07:09:00",
+              "type": "Withdraw",
+              "amount": 30.97,
+              "currency": "USD",
+              "receiver": {
+                "name": "Disney Plus",
+                "category_type": "Subscription",
+                "location": "Online"
+              }
+            }
+          }
+        ],
+        "success": true
+      }
+    ],
+    "status": "success"
+  },
+  {
+    "timestamp": "2025-11-03T09:52:50.856631",
+    "input": "What deposits have I made recently?",
+    "filter": {
+      "filters": [
+        {
+          "conditions": [
+            {
+              "field": "transaction.type",
+              "operator": "is",
+              "value": "Deposit"
+            },
+            {
+              "field": "transaction.timestamp",
+              "operator": "between",
+              "value": [
+                "2025-10-01",
+                "2025-11-03"
+              ]
+            }
+          ],
+          "sort": null,
+          "limit": null,
+          "group_by": null,
+          "aggregations": null,
+          "interval": null
+        }
+      ]
+    },
+    "elastic_query": [
+      {
+        "query": {
+          "bool": {
+            "must": [
+              {
+                "term": {
+                  "transaction.type.keyword": "Deposit"
+                }
+              },
+              {
+                "range": {
+                  "transaction.timestamp": {
+                    "gte": "2025-10-01",
+                    "lte": "2025-11-03"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "size": null
+      }
+    ],
+    "execution_results": [
+      {
+        "total_hits": 0,
+        "documents": [],
+        "success": true
+      }
+    ],
+    "status": "success"
+  },
+  {
+    "timestamp": "2025-11-03T09:52:54.424049",
+    "input": "How much have I spent on clothing?",
+    "filter": {
+      "filters": [
+        {
+          "conditions": [
+            {
+              "field": "transaction.receiver.category_type",
+              "operator": "is",
+              "value": "Clothing"
+            }
+          ],
+          "sort": null,
+          "limit": null,
+          "group_by": null,
+          "aggregations": null,
+          "interval": null
+        }
+      ]
+    },
+    "elastic_query": [
+      {
+        "query": {
+          "bool": {
+            "must": [
+              {
+                "term": {
+                  "transaction.receiver.category_type.keyword": "Clothing"
+                }
+              }
+            ]
+          }
+        },
+        "size": null
+      }
+    ],
+    "execution_results": [
+      {
+        "total_hits": 25,
+        "documents": [
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-27T19:36:00",
+              "type": "Withdraw",
+              "amount": 232.33,
+              "currency": "USD",
+              "receiver": {
+                "name": "Pellini",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-06T20:59:00",
+              "type": "Withdraw",
+              "amount": 160.69,
+              "currency": "USD",
+              "receiver": {
+                "name": "Mango",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-04-02T11:39:00",
+              "type": "Withdraw",
+              "amount": 15.03,
+              "currency": "USD",
+              "receiver": {
+                "name": "Nike",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-05-07T09:53:00",
+              "type": "Withdraw",
+              "amount": 150.43,
+              "currency": "USD",
+              "receiver": {
+                "name": "Pellini",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-05-10T02:46:00",
+              "type": "Withdraw",
+              "amount": 153.58,
+              "currency": "USD",
+              "receiver": {
+                "name": "Mango",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-06-01T07:30:00",
+              "type": "Withdraw",
+              "amount": 250.12,
+              "currency": "USD",
+              "receiver": {
+                "name": "Zara",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-06-06T11:31:00",
+              "type": "Withdraw",
+              "amount": 300.37,
+              "currency": "USD",
+              "receiver": {
+                "name": "Tommy's Shoes",
+                "category_type": "Clothing",
+                "location": "London"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-07-25T17:22:00",
+              "type": "Withdraw",
+              "amount": 150.26,
+              "currency": "USD",
+              "receiver": {
+                "name": "Mango",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-10-11T00:37:00",
+              "type": "Withdraw",
+              "amount": 170.29,
+              "currency": "USD",
+              "receiver": {
+                "name": "Nike",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          },
+          {
+            "user_id": 12345,
+            "user_name": "Elie Badine",
+            "card_number": "9876-5432-1098-7654",
+            "card_kind": "credit",
+            "card_type": "gold",
+            "transaction": {
+              "timestamp": "2024-11-14T16:04:00",
+              "type": "Withdraw",
+              "amount": 136.0,
+              "currency": "USD",
+              "receiver": {
+                "name": "Massimo Dutti",
+                "category_type": "Clothing",
+                "location": "Beirut"
+              }
+            }
+          }
+        ],
+        "success": true
+      }
+    ],
+    "status": "success"
+  }
+]

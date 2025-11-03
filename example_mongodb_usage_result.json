@@ -1,0 +1,57 @@
+{
+    "natural_language_query": "Show me the top 10 most expensive transactions from the last 2 years",
+    "extracted_filters": {
+        "filters": [
+            {
+                "conditions": [
+                    {
+                        "field": "timestamp",
+                        "operator": "between",
+                        "value": [
+                            "2023-01-01",
+                            "2025-12-31"
+                        ]
+                    }
+                ],
+                "sort": [
+                    {
+                        "field": "amount",
+                        "order": "desc"
+                    }
+                ],
+                "limit": 10,
+                "group_by": null,
+                "aggregations": null,
+                "interval": null
+            }
+        ]
+    },
+    "database_queries": [
+        {
+            "pipeline": [
+                {
+                    "$match": {
+                        "timestamp": {
+                            "$gte": "2023-01-01",
+                            "$lte": "2025-12-31"
+                        }
+                    }
+                },
+                {
+                    "$sort": {
+                        "amount": -1
+                    }
+                },
+                {
+                    "$limit": 10
+                }
+            ]
+        }
+    ],
+    "results": [
+        {
+            "total_hits": 3,
+            "documents": [
+                {
+                    "_id": "68ca7cf852824e3ec8719188",
+                    "accountId": 

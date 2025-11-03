@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import time
 from datetime import datetime, date
@@ -9,12 +10,13 @@ from pathlib import Path
 
 from llm.llm_agent import LLM
 from elasticsearch import Elasticsearch
-from pydantic import BaseModel, Field, create_model, field_validator, ValidationInfo
+from pydantic import BaseModel, Field, create_model, field_validator, model_validator, ValidationInfo
 
 
 import time
 import asyncio
-
+from dotenv import load_dotenv
+load_dotenv()
 
 class ModelBuilder:
     """Builds Pydantic models from Elasticsearch mappings, with or without a database connection."""
@@ -33,7 +35,8 @@ class ModelBuilder:
                  category_fields: Optional[List[str]] = None, 
                  fields_to_ignore: Optional[List[str]] = None,
                  mapping: Optional[Dict[str, Any]] = None,
-                 enum_fields: Optional[Dict[str, List[Any]]] = None):
+                 enum_fields: Optional[Dict[str, List[Any]]] = None,
+                 es_host: Optional[str] = None):
 
         if es_client and index_name:
             self.mode = "es"
@@ -48,10 +51,12 @@ class ModelBuilder:
         self.fields_to_ignore = fields_to_ignore or []
         self.provided_mapping = mapping
         self.provided_enum_fields = enum_fields or {}
+        self.es_host = es_host
         
         self._model_class: Optional[type[BaseModel]] = None
         self._model_info = None
         self._mapping_cache = None
+        self._schema_data = None
 
     def _GetIndexMapping(self) -> Dict[str, Any]:
         """Get mapping from ES or from provided mapping."""
@@ -59,13 +64,27 @@ class ModelBuilder:
             return self._mapping_cache
 
         if self.mode == "es":
-            # Static type checkers (e.g. mypy/pyright) cannot infer that `es_client` and
+            
+                        # Static type checkers (e.g. mypy/pyright) cannot infer that `es_client` and
             # `index_name` are non-null when `self.mode == "es"`. An explicit assertion
             # makes this guarantee clear and eliminates the "attribute of None" warning.
-            assert self.es_client is not None and self.index_name is not None, "Elasticsearch client or index name is missing"
-            mappings = self.es_client.indices.get_mapping(index=self.index_name)
-            index_mapping = mappings.get(self.index_name, {}).get("mappings", {})
-            self._mapping_cache = index_mapping.get("properties", {})
+            # assert self.es_client is not None and self.index_name is not None, "Elasticsearch client or index name is missing"
+            # mappings = self.es_client.indices.get_mapping(index=self.index_name)
+            # index_mapping = mappings.get(self.index_name, {}).get("mappings", {})
+            # self._mapping_cache = index_mapping.get("properties", {})
+            # Use the utility function to get schema data
+            if not self._schema_data:
+                from utils import get_es_schema_for_api
+                assert self.es_host is not None and self.index_name is not None, "ES host or index name is missing"
+                self._schema_data = get_es_schema_for_api(
+                    es_host=self.es_host,
+                    index_name=self.index_name,
+                    category_fields=self.category_fields
+                )
+            
+            self._mapping_cache = self._schema_data["elasticsearch_mapping"]
+            # Update provided_enum_fields with the fetched enum values
+            self.provided_enum_fields.update(self._schema_data["enum_fields"])
         else: # mapping mode
             self._mapping_cache = self.provided_mapping or {}
             
@@ -75,8 +94,16 @@ class ModelBuilder:
         """Get distinct values for a field from Elasticsearch. Requires 'es' mode."""
         if self.mode != "es":
             raise RuntimeError("Cannot get distinct values without an Elasticsearch client.")
+        
+        # If we have schema data from utils function, try to get values from there first
+        if self._schema_data and "enum_fields" in self._schema_data:
+            # Try to find the field in enum_fields
+            for field_name, values in self._schema_data["enum_fields"].items():
+                if field_name == field_path or field_name == field_path.replace(".keyword", ""):
+                    return values
+        
+        # Fallback to direct ES query if not found in schema data
         try:
-            # See note in `_GetIndexMapping` – we assert for the type checker.
             assert self.es_client is not None and self.index_name is not None, "Elasticsearch client or index name is missing"
             mappings = self.es_client.indices.get_mapping(index=self.index_name)
             index_mapping = (
@@ -155,6 +182,12 @@ class ModelBuilder:
             return self.provided_enum_fields.get(full_field_path) or self.provided_enum_fields.get(field_name)
         
         if self.mode == "es" and (full_field_path in self.category_fields or field_name in self.category_fields):
+            # First try to get from provided_enum_fields (populated by utils function)
+            enum_values = self.provided_enum_fields.get(full_field_path) or self.provided_enum_fields.get(field_name)
+            if enum_values:
+                return enum_values
+            
+            # Fallback to direct ES query
             field_path_for_es = f"{full_field_path}.keyword" if es_type == "text" else full_field_path
             return self.GetDistinctValues(field_path_for_es)
         
@@ -251,218 +284,462 @@ class FilterModelBuilder:
         self._filter_model_class = None
 
     def BuildFilterModel(self) -> type[BaseModel]:
-        """Build Pydantic model for query filters."""
-        if self._filter_model_class is None:
-            class OperatorEnum(str, Enum):
-                lt = "<"
-                gt = ">"
-                isin = "isin"
-                notin = "notin"
-                eq = "is"
-                ne = "different"
-                be = "between"
+        """Build Pydantic model for query filters with improved type safety and features."""
+        class OperatorEnum(str, Enum):
+            lt = "<"         # Existing
+            gt = ">"         # Existing
+            isin = "isin"    # Existing
+            notin = "notin"  # Existing
+            eq = "is"        # Existing
+            ne = "different" # Existing
+            be = "between"   # Existing
+            contains = "contains"  # NEW: For string partial matches
+            exists = "exists"      # NEW: Check if field exists (non-null)
 
-            class SortOrderEnum(str, Enum):
-                asc = "asc"
-                desc = "desc"
-            
-            
-            field_enum_members = {k: k for k in self.model_info.keys()}
-            FieldEnum = Enum("FieldEnum", field_enum_members)
-            
-            class sortField(FieldEnum):
-                sort_order: SortOrderEnum
-            
-            _model_info = self.model_info
+        class SortOrderEnum(str, Enum):
+            asc = "asc"
+            desc = "desc"
 
-            class Query(BaseModel):
-                field: FieldEnum
-                operator: OperatorEnum
-                value: Union[str, float, int, List[str], List[date]]
-                sort_field: Optional[list[sortField]] = Field(default=None, description="Field to sort by")
-                limit: Optional[int] = Field(default=None, description="Maximum number of results to return")
-                group_by: Optional[FieldEnum] = Field(default=None, description="Field to group results by")
+        class AggregationEnum(str, Enum):  # NEW: For explicit aggregations in group_by
+            SUM = "sum"
+            AVG = "avg"
+            COUNT = "count"
+            MIN = "min"
+            MAX = "max"
 
-                @field_validator("value")
-                def validate_value(cls, v, info: ValidationInfo):
-                    if "field" not in info.data or "operator" not in info.data:
-                        return v
+        class TimeIntervalEnum(str, Enum):  # NEW: For date_histogram intervals
+            DAY = "day"
+            WEEK = "week" 
+            MONTH = "month"
+            YEAR = "year"
 
-                    field = info.data["field"].value
-                    op = info.data["operator"].value
-                    field_info = _model_info[field]
-                    ftype = field_info["type"]
+        _model_info = self.model_info
+        field_enum_members = {k: k for k in self.model_info.keys()}
+        FieldEnum = Enum("FieldEnum", field_enum_members)
 
-                    def fail(msg):
-                        raise ValueError(f"Invalid value for field '{field}' with type '{ftype}': {msg}")
+        class SortField(BaseModel):  # NEW: Typed sort field (allows multiple)
+            field: FieldEnum
+            order: SortOrderEnum = SortOrderEnum.asc
 
-                    if op in ("<", ">"):
-                        if ftype not in ("number", "date"):
-                            fail(f"Operator '{op}' only valid for number/date fields")
-                        if ftype == "number":
-                            try:
-                                float(v)
-                            except:
-                                fail("Expected numeric value")
-                        elif ftype == "date":
-                            try:
-                                if isinstance(v, str):
-                                    date.fromisoformat(v)
-                            except:
-                                fail("Expected ISO date string (YYYY-MM-DD)")
+        class Aggregation(BaseModel):  # NEW: Typed aggregation spec
+            field: FieldEnum
+            type: AggregationEnum
+            # NEW: Optional having clause for post-aggregation filtering
+            having_operator: Optional[OperatorEnum] = Field(default=None, description="Operator for post-aggregation filtering (e.g., '>')")
+            having_value: Optional[Union[str, int, float]] = Field(default=None, description="Value for post-aggregation filtering (e.g., 1)")
 
-                    elif op in ("isin", "notin"):
-                        if not isinstance(v, list):
-                            fail("Expected list of values")
-                        if ftype == "enum":
-                            allowed = field_info.get("values", [])
-                            if not all(x in allowed for x in v):
-                                fail(f"Values must be in enum: {allowed}")
+        class Query(BaseModel):
+            field: FieldEnum
+            operator: OperatorEnum
+            value: Union[  # IMPROVED: More precise unions based on common types
+                str, float, int, bool, date,
+                List[Union[str, float, int, date]],  # For isin/notin/between
+                None  # For exists (value=True/False for exists/not exists)
+            ]
 
-                    elif op in ("is", "different"):
-                        if ftype == "enum":
-                            if v not in field_info.get("values", []):
-                                fail(f"Must be one of {field_info.get('values', [])}")
-                        elif ftype == "number":
-                            try:
-                                float(v)
-                            except:
-                                fail("Expected number")
-                        elif ftype == "boolean":
-                            if v not in [True, False, "true", "false", "True", "False"]:
-                                fail("Expected boolean")
-                        elif ftype == "date":
-                            try:
-                                date.fromisoformat(v)
-                            except:
-                                fail("Expected date in ISO format")
+            @field_validator("value")
+            def validate_value(cls, v, info: ValidationInfo):
+                if "field" not in info.data or "operator" not in info.data:
                     return v
+                
+                field = info.data["field"].value
+                op = info.data["operator"].value
+                field_info = _model_info[field]  # Assuming _model_info is class-level or passed
+                ftype = field_info["type"]
 
-            class QueryFilters(BaseModel):
-                filters: list[list[Query]] = Field(description="Filtering conditions for the query")
+                def fail(msg: str):
+                    raise ValueError(f"Invalid value for '{field}' ({ftype}): {msg}")
+               
+                # IMPROVED: Stricter checks, including new operators
+                if op in ("<", ">", "between"):
+                    if ftype not in ("number", "date"):
+                        fail(f"Operator '{op}' only for number/date")
+                    if op == "between" and (not isinstance(v, list) or len(v) != 2):
+                        fail("Expected list of 2 values")
+                elif op in ("isin", "notin"):
+                    if not isinstance(v, list):
+                        fail("Expected list")
+                    if ftype == "enum" and not all(x in field_info.get("values", []) for x in v):
+                        fail(f"Values must be in enum: {field_info['values']}")
+                elif op == "contains":
+                    if ftype != "string" or not isinstance(v, str):
+                        fail("Expected string for contains")
+                elif op == "exists":
+                    if not isinstance(v, bool):
+                        fail("Expected bool (True=exists, False=not exists)")
+                # ... (expand with existing logic for eq/ne, numbers, dates, etc.)
+                return v
 
-            self._filter_model_class = QueryFilters
+        class QuerySlice(BaseModel):  # NEW: Per-slice model for clarity
+            conditions: List[Query] = Field(description="AND-joined filter conditions")
+            sort: Optional[List[SortField]] = None  # IMPROVED: Multi-field sort at slice level
+            limit: Optional[int] = None
+            group_by: Optional[List[FieldEnum]] = None  # IMPROVED: Multi-field group_by
+            aggregations: Optional[List[Aggregation]] = None  # NEW: Explicit aggs, now with optional having clause
+            interval: Optional[TimeIntervalEnum] = Field(default=TimeIntervalEnum.MONTH, description="Time interval for date grouping")
+
+            @model_validator(mode='after')
+            def validate_slice(self) -> 'QuerySlice':
+                """
+                Ensures query slice parameters are used logically.
+                This validator corrects invalid combinations instead of raising errors.
+                """
+                
+                for query in self.conditions:
+                    if query.field.value == "null":
+                        self.conditions.remove(query)
+                
+                # Rule: aggregations and interval require group_by. If no group_by, remove them.
+                if not self.group_by:
+                    if self.aggregations:
+                        self.aggregations = None
+                    # The user mentioned this case specifically.
+                    if self.interval:
+                        self.interval = None
+                
+                # Rule: interval is only applicable when grouping by a date field.
+                # If interval is set, but no date field is in group_by, remove interval.
+                if self.interval and self.group_by:
+                    is_date_grouped = any(
+                        _model_info.get(f.value, {}).get("type") == "date" for f in self.group_by
+                    )
+                    if not is_date_grouped:
+                        self.interval = None
+                
+                return self
+
+        class QueryFilters(BaseModel):
+            filters: List[QuerySlice] = Field(description="List of query slices (for comparisons)")
+
+        self._filter_model_class = QueryFilters
         return self._filter_model_class
 
     def GenerateSystemPrompt(self) -> str:
         """Generate system prompt for LLM filter extraction."""
+        # Note: All literal curly braces in this f-string are doubled `{{` `}}`
+        # to prevent format errors, as this string is processed by Python's
+        # .format() or f-string mechanism.
         return f"""
 Today is {datetime.now().strftime("%Y-%m-%d")}
 
-You are an expert assistant that converts **natural-language questions into JSON filters** for an analytics engine.
+### 1. Your Goal
+You are an expert assistant that converts a user's natural-language question into a structured JSON filter. Your output MUST strictly follow the JSON schema provided below.
 
-The user might ask for:
-• a **single slice** of data – e.g. "show my restaurant purchases", or  
-• a **comparison of multiple slices** – e.g. "compare hotel spend last year with food spend on my gold card".
+### 2. Available Data Schema
+This is the data you can query. Fields are specified as `object.field`.
 
-### 1. Available Schema
 {json.dumps(self.model_info, indent=2)}
 
-### 2. Supported Operators
-| Symbol | Meaning      | Allowed on          |
-|--------|--------------|---------------------|
-| <      | less than    | number, date        |
-| >      | greater than | number, date        |
-| isin   | value in     | any                 |
-| notin  | value not in | any                 |
-| is     | equals       | any                 |
-| different | not equal | any                 |
-| between  | range      | number, date (TBD)  |
+### 3. How to Build the JSON Filter
+Your entire output must be a single JSON object with one key, `filters`. This key holds a list of "slices". Each slice represents a set of data.
 
-### 3. Additional Query Options
-- **Sorting**: Use `sort_field` and `sort_order` ("asc" or "desc") to sort results
-- **Limiting**: Use `limit` to restrict the number of results returned
-- **Grouping**: Use `group_by` to aggregate results by a field (e.g., "expenses by location")
+#### Supported Operators
+| Symbol | Meaning | Allowed on |
+|---|---|---|
+| `<` | less than | number, date |
+| `>` | greater than | number, date |
+| `isin` | value in list | any |
+| `notin` | value not in list | any |
+| `is` | equals | any |
+| `different` | not equal | any |
+| `between` | range (for dates) | date |
+| `contains` | partial string match | string |
+| `exists` | field is not null | any (use `true`) |
 
-### 4. Reasoning steps
-1. Detect time references and convert to ISO dates.  
-2. Extract entities (amounts, categories, card types …).  
-3. Determine intent: single slice vs multi-slice comparison.  
-4. Map entities to schema fields.  
-5. Choose operators.  
-6. Validate values (enum membership, numeric type, date format).
+#### Slice Options
+Each slice in the `filters` list can have these keys:
+- `conditions`: A list of filter conditions.
+- `sort`: A list of fields to sort by asc or desc (e.g., `[{{\\"field\\": \\"transaction.amount\\", \\"order\\": \\"desc\\"}}]`).
+- `limit`: The maximum number of results to return.
+- `group_by`: A list of fields to group by.
+- `aggregations`: A list of calculations to perform on groups (e.g., `[{{\\"field\\": \\"transaction.amount\\", \\"type\\": \\"sum\\"}}]`). An aggregation can also include a `having_operator` and `having_value` to filter groups based on the result.
+- `interval`: Use for date grouping (`day`, `week`, `month`, `year`). Defaults to `month`.
 
-### 5. Output format  ❗️
-Return **only** a JSON object that matches this schema:
+### 4. Critical Rules & Guardrails
+- **ALWAYS use the field names from the schema.** Do not invent fields. If a user's term is ambiguous (e.g., "category"), map it to the most likely schema field (e.g., `transaction.receiver.category_type`).
+- **`aggregations` and `interval` ONLY work with `group_by`.** If there is no `group_by`, do not use `aggregations` or `interval`.
+- **`interval` is ONLY for date fields.** Do not use it when grouping by non-date fields.
+- **Comparisons mean multiple slices.** If the user says "compare A with B", create two slices in the `filters` list. The first for A, the second for B.
+- **Be precise with dates.** Convert relative dates like "last month" or "this year" into specific date ranges (e.g., `"operator": "between", "value": ["2024-01-01", "2024-12-31"]`).
 
+### 5. Realistic Examples
+
+#### Example 1: Simple Filtering
+**User**: "what were my transactions at starbucks?"
+```json
 {{
   "filters": [
-    [ /* first slice – AND-joined conditions */ ],
-    [ /* second slice (if comparing)         */ ],
-    /* more slices if user asks for them     */
+    {{
+      "conditions": [
+        {{ "field": "transaction.receiver.name", "operator": "is", "value": "Starbucks" }}
+      ]
+    }}
   ]
 }}
+```
 
-* One inner list ⇒ single slice.
-* Two or more inner lists ⇒ comparison slices, in the order mentioned by the user.
-* Do **not** add extra keys.
-
-### 6. Examples
-
-#### Single slice
-
-**User**: "transactions over $100 in December"
-
+#### Example 2: Time-Based Aggregation
+**User**: "How much did I spend on food each month this year?"
+```json
 {{
   "filters": [
-    [
-      {{ "field": "amount",            "operator": ">",  "value": 100 }},
-      {{ "field": "transaction_date",  "operator": "isin",
-        "value": ["2024-12-01","2024-12-31"] }}
-    ]
+    {{
+      "conditions": [
+        {{ "field": "transaction.receiver.category_type", "operator": "is", "value": "food" }},
+        {{ "field": "transaction.timestamp", "operator": "between", "value": ["2024-01-01", "2024-12-31"] }}
+      ],
+      "group_by": ["transaction.timestamp"],
+      "interval": "month",
+      "aggregations": [
+        {{ "field": "transaction.amount", "type": "sum" }}
+      ]
+    }}
   ]
 }}
+```
 
-#### Two-slice comparison
-
-**User**: "compare hotel spend last year with food spend on my gold card"
-
+#### Example 3: Two-Slice Comparison
+**User**: "Compare my spending on flights vs hotels for my gold card last year."
+```json
 {{
   "filters": [
-    [
-      {{ "field": "transaction.receiver.category_type", "operator": "is", "value": "hotel" }},
-      {{ "field": "transaction_date",                   "operator": "isin",
-        "value": ["2024-01-01","2024-12-31"] }}
-    ],
-    [
-      {{ "field": "transaction.receiver.category_type", "operator": "is", "value": "food" }},
-      {{ "field": "card_type",                          "operator": "is", "value": "GOLD" }}
-    ]
+    {{
+      "conditions": [
+        {{ "field": "transaction.receiver.category_type", "operator": "is", "value": "flight" }},
+        {{ "field": "card_type", "operator": "is", "value": "GOLD" }},
+        {{ "field": "transaction.timestamp", "operator": "between", "value": ["2023-01-01", "2023-12-31"] }}
+      ]
+    }},
+    {{
+      "conditions": [
+        {{ "field": "transaction.receiver.category_type", "operator": "is", "value": "hotel" }},
+        {{ "field": "card_type", "operator": "is", "value": "GOLD" }},
+        {{ "field": "transaction.timestamp", "operator": "between", "value": ["2023-01-01", "2023-12-31"] }}
+      ]
+    }}
   ]
 }}
+```
 
-#### Query with sorting and limiting
-
-**User**: "show me my top 10 highest transactions sorted by amount"
-
+#### Example 4: Complex Query with Sorting and Limiting
+**User**: "What were my top 5 most expensive transactions in London, and when did they happen?"
+```json
 {{
   "filters": [
-    [
-      {{ "field": "amount", "operator": ">", "value": 0, "sort_field": "amount", "sort_order": "desc", "limit": 10 }}
-    ]
+    {{
+      "conditions": [
+        {{ "field": "transaction.receiver.location", "operator": "is", "value": "London" }}
+      ],
+      "sort": [
+        {{ "field": "transaction.amount", "order": "desc" }}
+      ],
+      "limit": 5
+    }}
   ]
 }}
+```
 
-#### Query with grouping
+Below are the **re‑aligned “hard‑mode” examples**.
+Every field now exists in the supplied `user_transactions` mapping.
 
-**User**: "give me my expenses by location"
+---
 
+### Example 5 – Quarter‑over‑Quarter Grocery Spend by Category
+
+```json
 {{
   "filters": [
-    [
-      {{ "field": "amount", "operator": ">", "value": 0, "group_by": "transaction.receiver.location" }}
-    ]
+    {{
+      "conditions": [
+        {{ "field": "transaction.receiver.category_type",
+          "operator": "is",
+          "value": "grocery" }},
+        {{ "field": "transaction.timestamp",
+          "operator": "between",
+          "value": ["2025-01-01", "2025-03-31"] }}
+      ],
+      "group_by": ["transaction.receiver.category_type"],
+      "aggregations": [
+        {{ "field": "transaction.amount", "type": "sum" }},
+        {{ "field": "transaction.amount", "type": "avg" }}
+      ]
+    }},
+    {{
+      "conditions": [
+        {{ "field": "transaction.receiver.category_type",
+          "operator": "is",
+          "value": "grocery" }},
+        {{ "field": "transaction.timestamp",
+          "operator": "between",
+          "value": ["2024-01-01", "2024-03-31"] }}
+      ],
+      "group_by": ["transaction.receiver.category_type"],
+      "aggregations": [
+        {{ "field": "transaction.amount", "type": "sum" }},
+        {{ "field": "transaction.amount", "type": "avg" }}
+      ]
+    }}
   ]
 }}
+```
 
-### 7. Edge cases & rules
+---
 
-* If the query clearly says "compare A with B", output exactly two slices.
-* For ≥3 comparisons, output one slice per dataset.
-* If the query references unknown fields, reply with an empty `filters` list.
-* Never produce invalid enum values or non-ISO dates.
+### Example 6 – High‑Value Receiver‑Name Search with Existence Check
 
-Now read the user's question and output **only** the JSON object described above.
+```json
+{{
+  "filters": [
+    {{
+      "conditions": [
+        {{ "field": "transaction.amount",
+          "operator": ">",
+          "value": 1000 }},
+        {{ "field": "transaction.receiver.name",
+          "operator": "contains",
+          "value": "airfare" }},
+        {{ "field": "transaction.receiver.name",
+          "operator": "exists",
+          "value": true }}
+      ],
+      "sort": [
+        {{ "field": "transaction.timestamp", "order": "desc" }}
+      ],
+      "limit": 10
+    }}
+  ]
+}}
+```
+
+---
+
+### Example 7 – Monthly Withdrawal Counts & Totals (USD)
+
+```json
+{{
+  "filters": [
+    {{
+      "conditions": [
+        {{ "field": "transaction.type",
+          "operator": "is",
+          "value": "Withdrawal" }},
+        {{ "field": "transaction.currency",
+          "operator": "is",
+          "value": "USD" }},
+        {{ "field": "transaction.timestamp",
+          "operator": "between",
+          "value": ["2023-01-01", "2023-06-30"] }}
+      ],
+      "group_by": ["transaction.timestamp"],
+      "interval": "month",
+      "aggregations": [
+        {{ "field": "transaction.amount", "type": "count" }},
+        {{ "field": "transaction.amount", "type": "sum" }}
+      ]
+    }}
+  ]
+}}
+```
+
+---
+
+### Example 8 – Multi‑Level Grouping of Non‑USD/EUR Deposits (2024)
+
+```json
+{{
+  "filters": [
+    {{
+      "conditions": [
+        {{ "field": "transaction.type",
+          "operator": "is",
+          "value": "Deposit" }},
+        {{ "field": "transaction.currency",
+          "operator": "notin",
+          "value": ["USD", "EUR"] }},
+        {{ "field": "transaction.timestamp",
+          "operator": "between",
+          "value": ["2024-01-01", "2024-12-31"] }}
+      ],
+      "group_by": [
+        "transaction.currency",
+        "transaction.receiver.location"
+      ],
+      "aggregations": [
+        {{ "field": "transaction.amount", "type": "min" }},
+        {{ "field": "transaction.amount", "type": "max" }}
+      ]
+    }}
+  ]
+}}
+```
+
+---
+
+### Example 9 – Daily Spend Comparison: Paris vs New York (May 2025)
+
+```json
+{{
+  "filters": [
+    {{
+      "conditions": [
+        {{ "field": "transaction.receiver.location",
+          "operator": "is",
+          "value": "Paris" }},
+        {{ "field": "transaction.timestamp",
+          "operator": "between",
+          "value": ["2025-05-01", "2025-05-31"] }}
+      ],
+      "group_by": ["transaction.timestamp"],
+      "interval": "day",
+      "aggregations": [
+        {{ "field": "transaction.amount", "type": "sum" }}
+      ]
+    }},
+    {{
+      "conditions": [
+        {{ "field": "transaction.receiver.location",
+          "operator": "is",
+          "value": "New York" }},
+        {{ "field": "transaction.timestamp",
+          "operator": "between",
+          "value": ["2025-05-01", "2025-05-31"] }}
+      ],
+      "group_by": ["transaction.timestamp"],
+      "interval": "day",
+      "aggregations": [
+        {{ "field": "transaction.amount", "type": "sum" }}
+      ]
+    }}
+  ]
+}}
+```
+
+---
+
+### Example 10 – Find Days With Multiple Transactions (Having Clause)
+**User**: "Show me all transactions on days where I made more than one purchase."
+```json
+{{
+  "filters": [
+    {{
+      "group_by": ["transaction.timestamp"],
+      "interval": "day",
+      "aggregations": [
+        {{
+          "field": "transaction.id",
+          "type": "count",
+          "having_operator": ">",
+          "having_value": 1
+        }}
+      ]
+    }}
+  ]
+}}
+```
+━━━━━━━━━━━━━━━━━━━━━━━
+📤 **Your Task**
+After reading the user question, output **only** the corresponding JSON object (starting with `{{ "filters": [...] }}`). No extra explanation.
+━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 
@@ -479,12 +756,12 @@ class LlmClientFactory:
         self.api_key = api_key
         self._client = None
 
-    def GetClient(self, result_type: type[BaseModel], system_prompt: str) -> LLM:
+    def GetClient(self, output_type: type[BaseModel], system_prompt: str) -> LLM:
         """Get or create LLM client."""
         if self._client is None:
             self._client = LLM(
                 model=self.model_name,
-                result_type=result_type,
+                output_type=output_type,
                 system_prompt=system_prompt,
                 api_key=self.api_key,
             )
@@ -501,7 +778,7 @@ class LlmClientFactory:
         return await client.llm_agent.run([query])
 
 
-def FiltersToDsl(query_filters: dict) -> List[Dict[str, Any]]:
+def FiltersToDsl(query_filters: dict, model_info: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Convert QueryFilters to Elasticsearch query DSL."""
     if not query_filters or "filters" not in query_filters:
         return [{"query": {"match_all": {}}}]
@@ -515,88 +792,180 @@ def FiltersToDsl(query_filters: dict) -> List[Dict[str, Any]]:
 
     for filter_slice in query_filters["filters"]:
         must_clauses: List[Dict[str, Any]] = []
-        sort_config = None
+        sort_configs = []
         limit_config = None
-        group_by_config = None
+        aggs_config = None
 
-        if not filter_slice:
-            elastic_query = {"query": {"match_all": {}}}
-        else:
-            for filter_condition in filter_slice:
-                field = filter_condition["field"]
-                operator = filter_condition["operator"]
-                value = filter_condition["value"]
+        # Process conditions
+        for condition in filter_slice.get("conditions", []):
+            field = condition["field"]
+            operator = condition["operator"]
+            value = condition["value"]
 
-                # Extract sort, limit, and group_by from the first condition that has them
-                if filter_condition.get("sort_field") and not sort_config:
-                    sort_field = filter_condition["sort_field"]
-                    sort_order = filter_condition.get("sort_order", "asc")
-                    sort_config = {sort_field: {"order": sort_order}}
+            is_string = isinstance(value, str) and not (len(value) == 10 and value[4] == "-" and value[7] == "-")
+            exact_field = _keyword_field(field) if is_string else field
 
-                if filter_condition.get("limit") and not limit_config:
-                    limit_config = filter_condition["limit"]
-
-                if filter_condition.get("group_by") and not group_by_config:
-                    group_by_config = filter_condition["group_by"]
-
-                is_string = isinstance(value, str) and not (len(value) == 10 and value[4] == "-" and value[7] == "-")
-                exact_field = _keyword_field(field) if is_string else field
-
-                if operator == ">":
-                    must_clauses.append({"range": {field: {"gt": value}}})
-                elif operator == "<":
-                    must_clauses.append({"range": {field: {"lt": value}}})
-                elif operator == "is":
-                    must_clauses.append({"term": {exact_field: value}})
-                elif operator == "different":
-                    must_clauses.append({"bool": {"must_not": {"term": {exact_field: value}}}})
-                elif operator == "isin":
-                    if isinstance(value, list):
-                        if len(value) == 2 and all(isinstance(v, str) and len(v) == 10 and v.count("-") == 2 for v in value):
-                            must_clauses.append({"range": {field: {"gte": value[0], "lte": value[1]}}})
-                        else:
-                            must_clauses.append({"terms": {exact_field: value}})
-                    else:
-                        must_clauses.append({"term": {exact_field: value}})
-                elif operator == "notin":
-                    if isinstance(value, list):
-                        must_clauses.append({"bool": {"must_not": {"terms": {exact_field: value}}}})
-                    else:
-                        must_clauses.append({"bool": {"must_not": {"term": {exact_field: value}}}})
-                elif operator == "between":
-                    if isinstance(value, list) and len(value) == 2:
+            if operator == ">":
+                must_clauses.append({"range": {field: {"gt": value}}})
+            elif operator == "<":
+                must_clauses.append({"range": {field: {"lt": value}}})
+            elif operator == "is":
+                must_clauses.append({"term": {exact_field: value}})
+            elif operator == "different":
+                must_clauses.append({"bool": {"must_not": {"term": {exact_field: value}}}})
+            elif operator == "isin":
+                if isinstance(value, list):
+                    if len(value) == 2 and all(isinstance(v, str) and len(v) == 10 and v.count("-") == 2 for v in value):
                         must_clauses.append({"range": {field: {"gte": value[0], "lte": value[1]}}})
+                    else:
+                        must_clauses.append({"terms": {exact_field: value}})
+                else:
+                    must_clauses.append({"term": {exact_field: value}})
+            elif operator == "notin":
+                if isinstance(value, list):
+                    must_clauses.append({"bool": {"must_not": {"terms": {exact_field: value}}}})
+                else:
+                    must_clauses.append({"bool": {"must_not": {"term": {exact_field: value}}}})
+            elif operator == "between":
+                if isinstance(value, list) and len(value) == 2:
+                    must_clauses.append({"range": {field: {"gte": value[0], "lte": value[1]}}})
+            elif operator == "contains":  # NEW: Partial string match
+                must_clauses.append({"wildcard": {exact_field: {"value": f"*{value}*", "case_insensitive": True}}})
+            elif operator == "exists":  # NEW: Exists check
+                if value is True:
+                    must_clauses.append({"exists": {"field": field}})
+                elif value is False:
+                    must_clauses.append({"bool": {"must_not": {"exists": {"field": field}}}})
 
-            elastic_query = {"query": {"bool": {"must": must_clauses}}} if must_clauses else {"query": {"match_all": {}}}
+        elastic_query = {"query": {"bool": {"must": must_clauses}}} if must_clauses else {"query": {"match_all": {}}}
 
-        # Add sorting if specified
-        if sort_config:
-            elastic_query["sort"] = [sort_config]  # type: ignore
+        # Process sort (multi-field)
+        if "sort" in filter_slice and filter_slice["sort"]:
+            for s in filter_slice["sort"]:
+                sort_configs.append({s["field"]: {"order": s.get("order", "asc")}})
+            elastic_query["sort"] = sort_configs  # type: ignore
 
-        # Add limit if specified
-        if limit_config:
+        # Process limit
+        if "limit" in filter_slice:
+            limit_config = filter_slice["limit"]
             elastic_query["size"] = limit_config  # type: ignore
 
-        # Add group by aggregation if specified
-        if group_by_config:
-            group_field = _keyword_field(group_by_config) if isinstance(group_by_config, str) else group_by_config
-            elastic_query["aggs"] = {  # type: ignore
-                "group_by": {
-                    "terms": {
-                        "field": group_field,
-                        "size": limit_config or 100
-                    },
-                    "aggs": {
-                        "total_amount": {
-                            "sum": {"field": "amount"}
-                        },
-                        "count": {
-                            "value_count": {"field": group_field}
+        # Process group_by and aggregations
+        if "group_by" in filter_slice and filter_slice["group_by"]:
+            group_fields = filter_slice["group_by"]
+            aggs = {}
+            current_agg = aggs
+
+            for i, gf in enumerate(group_fields):
+                agg_name = f"group_by_{i}"
+                field_type = model_info.get(gf, {}).get("type")
+
+                if field_type == "date":
+                    interval = filter_slice.get("interval", "month")  # Default to month, expect string value
+                    
+                    # Set format based on interval
+                    format_map = {
+                        "day": "yyyy-MM-dd",
+                        "week": "yyyy-'W'ww", 
+                        "month": "yyyy-MM",
+                        "year": "yyyy"
+                    }
+                    format_str = format_map.get(interval, "yyyy-MM")
+                    
+                    current_agg[agg_name] = {
+                        "date_histogram": {
+                            "field": gf,
+                            "calendar_interval": interval,
+                            "format": format_str
                         }
                     }
+                else:
+                    agg_field = _keyword_field(gf) if field_type in ("string", "enum", "text") else gf
+                    current_agg[agg_name] = {
+                        "terms": {
+                            "field": agg_field,
+                            "size": limit_config or 100
+                        }
+                    }
+
+                if i < len(group_fields) - 1:
+                    current_agg[agg_name]["aggs"] = {}
+                    current_agg = current_agg[agg_name]["aggs"]
+
+            # Navigate to the deepest aggregation level (always for group_by)
+            target_for_sub_aggs = aggs
+            for i in range(len(group_fields)):
+                group_agg_name = f"group_by_{i}"
+                if "aggs" in target_for_sub_aggs[group_agg_name]:
+                    target_for_sub_aggs = target_for_sub_aggs[group_agg_name]["aggs"]
+                else:
+                    target_for_sub_aggs = target_for_sub_aggs[group_agg_name]
+                    break
+            
+            sub_aggs = target_for_sub_aggs.setdefault("aggs", {})
+
+            # Always add top_hits to get documents per bucket (moved here to be unconditional)
+            sub_aggs["documents"] = {
+                "top_hits": {
+                    "size": 100
                 }
             }
-            # For groupby queries, we typically want 0 hits and just aggregations
+
+            # Process aggregations if present
+            having_clauses = []
+            if "aggregations" in filter_slice and filter_slice["aggregations"]:
+                for agg in filter_slice["aggregations"]:
+                    agg_metric_name = f"{agg['type'].lower()}_{agg['field'].replace('.', '_')}"
+                    
+                    field_for_agg = agg['field']
+                    field_info = model_info.get(field_for_agg, {})
+                    field_type = field_info.get("type")
+
+                    if agg["type"] == "count" and field_type in ("string", "enum", "text"):
+                        field_for_agg = _keyword_field(field_for_agg)
+
+                    if agg["type"] == "sum":
+                        sub_aggs[agg_metric_name] = {"sum": {"field": field_for_agg}}
+                    elif agg["type"] == "avg":
+                        sub_aggs[agg_metric_name] = {"avg": {"field": field_for_agg}}
+                    elif agg["type"] == "count":
+                        sub_aggs[agg_metric_name] = {"value_count": {"field": field_for_agg}}
+                    elif agg["type"] == "min":
+                        sub_aggs[agg_metric_name] = {"min": {"field": field_for_agg}}
+                    elif agg["type"] == "max":
+                        sub_aggs[agg_metric_name] = {"max": {"field": field_for_agg}}
+
+                    if agg.get("having_operator") and agg.get("having_value") is not None:
+                        having_clauses.append({
+                            "metric_name": agg_metric_name,
+                            "operator": agg["having_operator"],
+                            "value": agg["having_value"]
+                        })
+
+                # Add bucket_selector if there are having clauses
+                if having_clauses:
+                    buckets_path = {}
+                    script_parts = []
+                    op_map = {">": ">", "<": "<", "is": "==", "different": "!=", ">=": ">=", "<=": "<="}
+
+                    for i, clause in enumerate(having_clauses):
+                        script_var = f"var_{i}"
+                        buckets_path[script_var] = clause["metric_name"]
+                        op_symbol = op_map.get(clause["operator"], "==")
+                        value = clause['value']
+                        script_value = f"'{value}'" if isinstance(value, str) else value
+                        script_parts.append(f"params.{script_var} {op_symbol} {script_value}")
+                    
+                    script = " && ".join(script_parts)
+                    
+                    sub_aggs["having_filter"] = {
+                        "bucket_selector": {
+                            "buckets_path": buckets_path,
+                            "script": script
+                        }
+                    }
+
+            elastic_query["aggs"] = aggs  # type: ignore
             elastic_query["size"] = 0  # type: ignore
 
         elastic_queries.append(elastic_query)
@@ -650,7 +1019,7 @@ class ElasticsearchModelGenerator:
     def __init__(
         self,
         index_name: str,
-        es_host: str = "http://elastic:rvs59tB_VVANUy4rC-kd@84.16.230.94:9200",
+        es_host: str,
         fields_to_ignore: List[str] = [],
         category_fields: List[str] = [],
         model_name: str = "",
@@ -663,7 +1032,7 @@ class ElasticsearchModelGenerator:
         self.es_client = Elasticsearch(hosts=[es_host])
         
         self.model_builder = ModelBuilder(
-            self.es_client, index_name, category_fields, fields_to_ignore
+            self.es_client, index_name, category_fields, fields_to_ignore, es_host=es_host
         )
         self.filter_builder = FilterModelBuilder(self.model_builder.GetModelInfo())
         
@@ -718,7 +1087,7 @@ class ElasticsearchModelGenerator:
         system_prompt = self.filter_builder.GenerateSystemPrompt()
         
         filters = self.llm_factory.ParseQuery(query, filter_model, system_prompt)
-        elastic_queries = FiltersToDsl(filters)  # type: ignore[arg-type]
+        elastic_queries = FiltersToDsl(filters, self.filter_builder.model_info)  # type: ignore[arg-type]
         
         response = {
             "natural_language_query": query,
@@ -741,7 +1110,7 @@ class ElasticsearchModelGenerator:
         system_prompt = self.filter_builder.GenerateSystemPrompt()
         
         filters = await self.llm_factory.ParseQueryAsync(query, filter_model, system_prompt)
-        elastic_queries = FiltersToDsl(filters)  # type: ignore[arg-type]
+        elastic_queries = FiltersToDsl(filters, self.filter_builder.model_info)  # type: ignore[arg-type]
         
         response = {
             "natural_language_query": query,
@@ -802,7 +1171,7 @@ class ElasticsearchModelGenerator:
         return result["extracted_filters"]
     
     def FilterToElasticQuery(self, query_filters: dict) -> List[Dict[str, Any]]:
-        return FiltersToDsl(query_filters)
+        return FiltersToDsl(query_filters, self.filter_builder.model_info)  # type: ignore[arg-type]
     
     def ExecuteElasticQueries(self, elastic_queries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return RunElasticQueries(self.es_client, self.index_name, elastic_queries)
@@ -906,7 +1275,10 @@ def AppendQueriesToJson(queries: list[str], filename: str = "queries.json") -> N
     Append queries with their filters and elastic queries to JSON file using async processing.
     Skips existing queries and executes new ones to check if they work.
     """
+    print(os.getenv("elastic_host", "http://localhost:9200"))
+    time.sleep(5)
     client = ElasticsearchModelGenerator(
+        es_host=os.getenv("elastic_host", "http://localhost:9200"),
         index_name="user_transactions",
         category_fields=[
             "card_kind",
@@ -917,8 +1289,8 @@ def AppendQueriesToJson(queries: list[str], filename: str = "queries.json") -> N
             "transaction.currency"
         ],
         fields_to_ignore=["user_id", "card_number"],
-        model_name="ollama/qwen3:8b",
-        api_key="sk-1234567890"
+        model_name="gpt-4o",
+        api_key=os.getenv("OPENAI_API_KEY")
     )
     file_path = Path(filename)
 

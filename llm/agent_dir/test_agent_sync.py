@@ -25,7 +25,7 @@ class SentimentResult(BaseModel):
 # Initialize agent synchronously
 sentiment_analyzer = agent(
     model="gemini-2.0-flash",
-    result_type=SentimentResult,
+    output_type=SentimentResult,
     system_prompt="Analyze text sentiment and summarize key points",
     api_key=os.environ.get("API_KEY"),
     model_settings={"temperature": 0.2},

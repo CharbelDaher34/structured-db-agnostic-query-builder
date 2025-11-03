@@ -28,7 +28,7 @@ async def main():
     # Initialize the Agent WITHIN the async context
     gemini_agent = agent(
         model="gemini-2.0-flash",
-        result_type=ExampleResult,
+        output_type=ExampleResult,
         system_prompt="extract the sex and description and sentiment from the text",
         api_key=os.environ.get("API_KEY"),
         name="GeminiSummarizer",

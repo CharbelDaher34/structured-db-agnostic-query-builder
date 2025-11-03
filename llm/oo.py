@@ -778,7 +778,7 @@ Now read the user's question and output **only** the JSON object described above
         if self._llm_client is None:
             self._llm_client = LLM(
                 model="ollama/qwen3:8b",
-                result_type=self.generate_filter_model(),
+                output_type=self.generate_filter_model(),
                 system_prompt=self.generate_system_prompt(),
                 api_key="key",
             )
@@ -800,7 +800,7 @@ Now read the user's question and output **only** the JSON object described above
         if self._llm_client is None:
             self._llm_client = LLM(
                 model="gemini-2.0-flash",
-                result_type=self.generate_filter_model(),
+                output_type=self.generate_filter_model(),
                 system_prompt=self.generate_system_prompt(),
                 api_key="AIzaSyDp8n_AmYsspADJBaNpkJvBdlch1-9vkhw",
             )
