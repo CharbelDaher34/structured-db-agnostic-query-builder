@@ -42,7 +42,6 @@ class ESSchemaExtractor:
         es_host: str,
         index_name: str,
         category_fields: Optional[List[str]] = None,
-        use_utils_schema: bool = True,
     ):
         """
         Initialize Elasticsearch schema extractor.
@@ -51,12 +50,10 @@ class ESSchemaExtractor:
             es_host: Elasticsearch host URL
             index_name: Name of the index to extract schema from
             category_fields: List of fields to treat as categories (enums)
-            use_utils_schema: If True, use utils.get_es_schema_for_api
         """
         self.es_host = es_host
         self.index_name = index_name
         self.category_fields = category_fields or []
-        self.use_utils_schema = use_utils_schema
         
         self.es_client = Elasticsearch(hosts=[es_host])
         
@@ -74,26 +71,11 @@ class ESSchemaExtractor:
         if self._schema_cache is not None:
             return self._schema_cache
         
-        # Try using utils function first for better enum support
-        if self.use_utils_schema:
-            try:
-                from utils import get_es_schema_for_api
-                
-                schema_data = get_es_schema_for_api(
-                    es_host=self.es_host,
-                    index_name=self.index_name,
-                    category_fields=self.category_fields,
-                )
-                
-                self._mapping_cache = schema_data["elasticsearch_mapping"]
-                self._enum_cache = schema_data["enum_fields"]
-                
-            except Exception as e:
-                print(f"Warning: Could not use utils schema function: {e}")
-                print("Falling back to direct ES mapping extraction...")
-                self._extract_mapping_from_es()
-        else:
-            self._extract_mapping_from_es()
+        # Extract mapping directly from Elasticsearch
+        self._extract_mapping_from_es()
+        
+        # Get distinct values for category fields
+        self._extract_enum_values()
         
         # Convert ES mapping to normalized schema
         self._schema_cache = self._normalize_mapping(
@@ -107,7 +89,19 @@ class ESSchemaExtractor:
         mappings = self.es_client.indices.get_mapping(index=self.index_name)
         index_mapping = mappings.get(self.index_name, {}).get("mappings", {})
         self._mapping_cache = index_mapping.get("properties", {})
-        self._enum_cache = {}
+    
+    def _extract_enum_values(self):
+        """Extract distinct values for category fields."""
+        if self._enum_cache is None:
+            self._enum_cache = {}
+        
+        for field_path in self.category_fields:
+            try:
+                values = self.get_distinct_values(field_path)
+                if values:
+                    self._enum_cache[field_path] = values
+            except Exception as e:
+                print(f"Warning: Could not get enum values for {field_path}: {e}")
     
     def _normalize_mapping(
         self, mapping: Dict[str, Any], prefix: str
@@ -191,21 +185,28 @@ class ESSchemaExtractor:
                 .get("properties", {})
             )
             
-            # Check if field is nested
+            # Check if field is nested and get field type
             field_parts = field_path.split(".")
             nested_path = None
             current_mapping = index_mapping
             current_path = []
+            field_type = None
             
             for part in field_parts:
                 current_path.append(part)
                 if part in current_mapping:
                     field_props = current_mapping[part]
-                    if field_props.get("type") == "nested":
+                    field_type = field_props.get("type")
+                    if field_type == "nested":
                         nested_path = ".".join(current_path)
                         break
                     elif "properties" in field_props:
                         current_mapping = field_props["properties"]
+            
+            # If field is text, try with .keyword suffix
+            agg_field = field_path
+            if field_type == "text" and not field_path.endswith(".keyword"):
+                agg_field = f"{field_path}.keyword"
             
             # Build aggregation query
             if nested_path:
@@ -216,7 +217,7 @@ class ESSchemaExtractor:
                             "nested": {"path": nested_path},
                             "aggs": {
                                 "distinct_values": {
-                                    "terms": {"field": field_path, "size": size}
+                                    "terms": {"field": agg_field, "size": size}
                                 }
                             },
                         }
@@ -234,7 +235,7 @@ class ESSchemaExtractor:
                     "size": 0,
                     "aggs": {
                         "distinct_values": {
-                            "terms": {"field": field_path, "size": size}
+                            "terms": {"field": agg_field, "size": size}
                         }
                     },
                 }
@@ -248,6 +249,13 @@ class ESSchemaExtractor:
             return [bucket["key"] for bucket in buckets]
         
         except Exception as e:
+            # If it's a fielddata error and we haven't tried .keyword yet, try again
+            if "fielddata" in str(e).lower() and not field_path.endswith(".keyword"):
+                try:
+                    return self.get_distinct_values(f"{field_path}.keyword", size)
+                except:
+                    pass
+            
             print(f"Error getting distinct values for '{field_path}': {e}")
             return []
     
