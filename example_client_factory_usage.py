@@ -18,9 +18,10 @@ from dotenv import load_dotenv
 load_dotenv()
 class FilterModel(BaseModel):
     """Example filter model for query parsing."""
-    status: str = Field(description="Status filter (e.g., 'active', 'completed')")
-    priority: int = Field(description="Priority level (1-5)")
-    category: str = Field(description="Category name")
+    # status: str = Field(description="Status filter (e.g., 'active', 'completed')")
+    # priority: int = Field(description="Priority level (1-5)")
+    # category: str = Field(description="Category name")
+    response: str = Field(description="Response to the user's message")
 
 
 async def test_with_list_inputs():
@@ -51,8 +52,7 @@ async def test_with_list_inputs():
     
     # Test with list of text inputs
     inputs = [
-        "Context: We are filtering a task management system.",
-        "Find all high priority active tasks in the development category."
+        "Hello, how are you?",
     ]
     
     print("Processing inputs:")
@@ -63,15 +63,10 @@ async def test_with_list_inputs():
     result = await factory.parse_query(
         inputs=inputs,
         filter_model=FilterModel,
-        system_prompt="Parse the natural language query into a structured filter."
+        system_prompt="Reply to the user's message."
     )
     
-    print("Result:")
-    print(f"  Status: {result.get('status')}")
-    print(f"  Priority: {result.get('priority')}")
-    print(f"  Category: {result.get('category')}")
-    print()
-    print(f"Full result: {result}")
+    print(result)
 
 
 if __name__ == "__main__":

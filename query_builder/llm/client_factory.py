@@ -41,16 +41,17 @@ class LLMClientFactory:
         Initialize LLM client factory.
         
         Args:
-            model_name: Name of the LLM model (e.g., "gpt-4o", "openai:gpt-4o").
+            model_name: Name of the LLM model (e.g., "gpt-4o", "qwen3:8b").
                        If not provided, reads from LLM_MODEL environment variable.
             api_key: API key for the LLM provider.
                     If not provided, reads from LLM_API_KEY or OPENAI_API_KEY.
-            base_url: Optional base URL for OpenAI-compatible APIs.
+                    Optional when using base_url (e.g., Ollama doesn't require real API keys).
+            base_url: Optional base URL for OpenAI-compatible APIs (e.g., "http://localhost:11434/v1" for Ollama).
                      If not provided, reads from LLM_BASE_URL environment variable.
             model_settings: Optional model settings (temperature, top_p, etc.)
             
         Raises:
-            ValueError: If model_name or api_key is missing and not in environment
+            ValueError: If model_name is missing, or if api_key is missing when not using base_url
         """
         # Read from environment variables if not provided
         model_name = model_name or os.getenv("LLM_MODEL")
@@ -59,24 +60,33 @@ class LLMClientFactory:
         
         if not model_name:
             raise ValueError("model_name is required (provide as parameter or set LLM_MODEL env var)")
-        if not api_key:
-            raise ValueError("api_key is required (provide as parameter or set LLM_API_KEY/OPENAI_API_KEY env var)")
         
         self.api_key = api_key
-        self.base_url = base_url
         self.model_settings = model_settings or {"temperature": 0, "top_p": 1.0}
         
         # Configure model based on base_url
         if base_url:
-            # Use OpenAI-compatible API with custom base URL
+            # Use OpenAI-compatible API with custom base URL (e.g., Ollama, vLLM)
+            # Normalize base_url - ensure it ends with /v1 for OpenAI-compatible APIs
+            normalized_base_url = base_url.rstrip('/')
+            if not normalized_base_url.endswith('/v1'):
+                normalized_base_url = f"{normalized_base_url}/v1"
+            
+            self.base_url = normalized_base_url
+            
+            # For Ollama, api_key can be None or a dummy value
+            provider_kwargs = {"base_url": normalized_base_url}
+            if api_key:
+                provider_kwargs["api_key"] = api_key
+            
             self.model = OpenAIModel(
                 model_name=model_name,
-                provider=OpenAIProvider(
-                    base_url=base_url,
-                    api_key=api_key,
-                ),
+                provider=OpenAIProvider(**provider_kwargs),
             )
+        elif not api_key:
+            raise ValueError("api_key is required when not using a custom base_url (provide as parameter or set LLM_API_KEY/OPENAI_API_KEY env var)")
         else:
+            self.base_url = None
             # Use standard OpenAI model or other providers
             # Set API key in environment for Pydantic AI to use
             if model_name.startswith(("openai:", "gpt")):
@@ -95,32 +105,38 @@ class LLMClientFactory:
     
     def _create_agent(
         self,
-        output_type: type[BaseModel],
+        output_type: Optional[type[BaseModel]],
         system_prompt: str,
-    ) -> Agent[None, BaseModel]:
+    ) -> Agent[None, Optional[BaseModel]]:
         """
         Create a Pydantic AI agent.
         
         Args:
-            output_type: Pydantic model for structured output
+            output_type: Optional Pydantic model for structured output.
+                        If None, agent returns raw string response.
             system_prompt: System prompt for the LLM
             
         Returns:
             Configured Pydantic AI Agent
         """
-        return Agent(
-            model=self.model,
-            output_type=output_type,
-            system_prompt=system_prompt,
-            model_settings=self.model_settings,
-            retries=3,  # Increase retries for validation errors
-        )
+        agent_kwargs = {
+            "model": self.model,
+            "system_prompt": system_prompt,
+            "model_settings": self.model_settings,
+            "retries": 3,  # Increase retries for validation errors
+        }
+        
+        # Only add output_type if provided
+        if output_type is not None:
+            agent_kwargs["output_type"] = output_type
+        
+        return Agent(**agent_kwargs)
     
     async def parse_query(
         self,
         inputs: Union[InputType, List[InputType]],
-        filter_model: type[BaseModel],
-        system_prompt: str,
+        filter_model: Optional[type[BaseModel]] = None,
+        system_prompt: str = '',
     ) -> Dict[str, Any]:
         """
         Parse inputs asynchronously with multimodal support.
@@ -136,19 +152,30 @@ class LLMClientFactory:
                 - DocumentUrl: Document from URL
                 - BinaryContent: Binary data (images, audio, video, documents)
                 - List of any of the above
-            filter_model: Pydantic model for filter structure
+            filter_model: Optional Pydantic model for structured output.
+                         If provided, returns validated structured data.
+                         If None, returns raw string response.
             system_prompt: System prompt with instructions
             
         Returns:
-            Parsed filter dictionary
+            Dict with parsed data. If filter_model provided, returns structured dict.
+            If filter_model is None, returns {"response": "raw_string"}
             
         Examples:
-            # Text query
+            # Structured output with filter_model
             result = await factory.parse_query(
                 inputs="Find high priority items",
                 filter_model=FilterModel,
                 system_prompt="Parse the query"
             )
+            # Returns: {"status": "active", "priority": 5, ...}
+            
+            # Unstructured output without filter_model
+            result = await factory.parse_query(
+                inputs="Summarize this text",
+                system_prompt="Provide a brief summary"
+            )
+            # Returns: {"response": "The summary text..."}
             
             # Image analysis with text
             result = await factory.parse_query(
@@ -156,7 +183,7 @@ class LLMClientFactory:
                     "What's in this image?",
                     ImageUrl(url="https://example.com/image.png")
                 ],
-                filter_model=FilterModel,
+                filter_model=ImageAnalysisModel,
                 system_prompt="Analyze and extract data"
             )
             
@@ -170,7 +197,7 @@ class LLMClientFactory:
                         media_type="application/pdf"
                     )
                 ],
-                filter_model=FilterModel,
+                filter_model=DocumentDataModel,
                 system_prompt="Extract structured data"
             )
         """
@@ -180,5 +207,12 @@ class LLMClientFactory:
         input_data = [inputs] if not isinstance(inputs, list) else inputs
         
         result = await agent.run(input_data)
-        return result.output.model_dump(mode="json")
+        
+        # Handle structured vs unstructured output
+        if filter_model is not None:
+            # Structured output - return as dict
+            return result.output.model_dump(mode="json")
+        else:
+            # Unstructured output - return raw string
+            return {"response": result.output}
 
