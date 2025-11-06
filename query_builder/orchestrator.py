@@ -257,54 +257,11 @@ class QueryOrchestrator:
             else:
                 print(f"  {field_name}: {field_type}")
     
-    def query(self, natural_language_query: str, execute: bool = True) -> Dict[str, Any]:
-        """
-        Convert natural language query to database query and optionally execute.
-        
-        Args:
-            natural_language_query: Natural language query string
-            execute: If True, execute the query and return results
-            
-        Returns:
-            Dictionary with query, filters, and optionally results
-        """
-        if not self.llm_factory:
-            raise ValueError("LLM not configured. Provide llm_model and llm_api_key.")
-        
-        # Build filter model and prompt
-        filter_builder = self._get_filter_builder()
-        prompt_generator = self._get_prompt_generator()
-        
-        filter_model = filter_builder.build_filter_model()
-        system_prompt = prompt_generator.generate_system_prompt()
-        
-        # Parse query with LLM
-        filters = self.llm_factory.parse_query(
-            natural_language_query, filter_model, system_prompt
-        )
-        
-        # Translate to database queries
-        model_info = self.get_model_info()
-        db_queries = self.query_translator.translate(filters, model_info)
-        
-        response = {
-            "natural_language_query": natural_language_query,
-            "extracted_filters": filters,
-            "database_queries": db_queries,
-        }
-        
-        # Execute if requested
-        if execute and db_queries:
-            results = self.query_executor.execute(db_queries)
-            response["results"] = results
-        
-        return response
-    
-    async def query_async(
+    async def query(
         self, natural_language_query: str, execute: bool = True
     ) -> Dict[str, Any]:
         """
-        Async version of query().
+        Convert natural language query to database query and optionally execute.
         
         Args:
             natural_language_query: Natural language query string

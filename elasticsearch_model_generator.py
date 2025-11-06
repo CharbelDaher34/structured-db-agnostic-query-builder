@@ -1,249 +1,217 @@
 """
-Backwards compatibility wrapper for ElasticsearchModelGenerator.
+Example usage of the query builder with Elasticsearch.
 
-This module provides the same API as the original elasticsearch_model_generator.py
-but uses the new refactored architecture underneath.
-
-DEPRECATED: Use query_builder.QueryOrchestrator.from_elasticsearch() instead.
+3 comprehensive examples testing all functionalities with actual transaction data.
 """
 
+import os
 import json
-import sys
-from typing import Any, Dict, List, Optional
+import asyncio
+from dotenv import load_dotenv
+from query_builder import QueryOrchestrator
 
-from pydantic import BaseModel
+load_dotenv()
 
-from query_builder.orchestrator import QueryOrchestrator
-
-
-class ElasticsearchModelGenerator:
-    """
-    Backwards compatibility wrapper for the original ElasticsearchModelGenerator.
-    
-    All methods delegate to the new QueryOrchestrator implementation.
-    
-    DEPRECATED: Use query_builder.QueryOrchestrator.from_elasticsearch() instead.
-    """
-    
-    def __init__(
-        self,
-        index_name: str,
-        es_host: str,
-        fields_to_ignore: List[str] = [],
-        category_fields: List[str] = [],
-        model_name: str = "",
-        api_key: str = "",
-    ):
-        """
-        Initialize generator (delegates to QueryOrchestrator).
-        
-        Args:
-            index_name: Elasticsearch index name
-            es_host: Elasticsearch host URL
-            fields_to_ignore: List of fields to ignore
-            category_fields: List of fields to treat as categories
-            model_name: LLM model name
-            api_key: LLM API key
-        """
-        if not index_name:
-            raise ValueError("index_name is required")
-        
-        self.index_name = index_name
-        self.es_host = es_host
-        
-        # Create orchestrator with new architecture
-        self._orchestrator = QueryOrchestrator.from_elasticsearch(
-            es_host=es_host,
-            index_name=index_name,
-            category_fields=category_fields,
-            fields_to_ignore=fields_to_ignore,
-            llm_model=model_name if model_name else None,
-            llm_api_key=api_key if api_key else None,
-        )
-    
-    def GenerateModel(self, model_name: Optional[str] = None) -> type[BaseModel]:
-        """Generate Pydantic model from ES mapping."""
-        model_name = model_name or f"ES_{self.index_name.capitalize()}"
-        return self._orchestrator.generate_model(model_name)
-    
-    def GetModelInfo(self) -> Dict[str, Any]:
-        """Get flattened field information."""
-        return self._orchestrator.get_model_info()
-    
-    def PrintModelSummary(self):
-        """Print summary of generated model."""
-        self._orchestrator.print_model_summary()
-    
-    def Query(self, query: str, execute: bool = True) -> Dict[str, Any]:
-        """Complete pipeline: natural language to ES results."""
-        response = self._orchestrator.query(query, execute)
-        
-        # Rename for backwards compatibility
-        if "database_queries" in response:
-            response["elasticsearch_queries"] = response.pop("database_queries")
-        
-        return response
-    
-    async def QueryAsync(self, query: str, execute: bool = True) -> Dict[str, Any]:
-        """Async version of complete pipeline."""
-        response = await self._orchestrator.query_async(query, execute)
-        
-        # Rename for backwards compatibility
-        if "database_queries" in response:
-            response["elasticsearch_queries"] = response.pop("database_queries")
-        
-        return response
-    
-    def RunRawQuery(self, query: Dict[str, Any], size: int = 100) -> Dict[str, Any]:
-        """Execute raw Elasticsearch query."""
-        return self._orchestrator.query_raw(query, size)
-    
-    # Legacy method aliases
-    def generate_model(self, model_name: Optional[str] = None) -> type[BaseModel]:
-        return self.GenerateModel(model_name)
-    
-    def get_model_info(self) -> Dict[str, Any]:
-        return self.GetModelInfo()
-    
-    def print_model_summary(self):
-        return self.PrintModelSummary()
-    
-    def generate_filters_from_query(self, query: str):
-        return self.Query(query, execute=False)["extracted_filters"]
-    
-    async def generate_filters_from_query_async(self, query: str):
-        result = await self.QueryAsync(query, execute=False)
-        return result["extracted_filters"]
-    
-    def FilterToElasticQuery(self, query_filters: dict) -> List[Dict[str, Any]]:
-        model_info = self.GetModelInfo()
-        return self._orchestrator.query_translator.translator.translate(
-            query_filters, model_info
-        )
-    
-    def ExecuteElasticQueries(
-        self, elastic_queries: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
-        return self._orchestrator.query_executor.execute(elastic_queries)
-    
-    def QueryFromNaturalLanguage(
-        self, query: str, execute: bool = True, size: int = 100
-    ) -> Dict[str, Any]:
-        return self.Query(query, execute)
-    
-    async def QueryFromNaturalLanguageAsync(
-        self, query: str, execute: bool = True, size: int = 100
-    ) -> Dict[str, Any]:
-        return await self.QueryAsync(query, execute)
-    
-    def run_raw_elastic_query(
-        self, query: Dict[str, Any], size: int = 100
-    ) -> Dict[str, Any]:
-        return self.RunRawQuery(query, size)
-    
-    def debug_category_fields(self) -> Dict[str, Any]:
-        """Debug method for category fields (limited support in new architecture)."""
-        print("Warning: debug_category_fields has limited support in refactored version")
-        return {
-            "configured_category_fields": self._orchestrator.category_fields,
-            "message": "Use orchestrator.get_model_info() for field information",
-        }
-    
-    def populate_with_examples(self, model_class: type[BaseModel]) -> dict:
-        """Populate model with example values (limited support)."""
-        print("Warning: populate_with_examples not fully supported in refactored version")
-        return {}
-    
-    def get_example_value(self, annotation):
-        """Get example value for annotation (limited support)."""
-        if annotation is str:
-            return "example_string"
-        elif annotation in (int, float):
-            return 42
-        elif annotation is bool:
-            return True
-        return None
+DEFAULT_ES_HOST = os.getenv("elastic_host", "http://localhost:9200")
+DEFAULT_INDEX_NAME = os.getenv("ELASTIC_INDEX", "user_transactions")
+DEFAULT_CATEGORY_FIELDS = [
+    "card_kind",
+    "card_type",
+    "transaction.receiver.category_type",
+    "transaction.receiver.location",
+    "transaction.type",
+    "transaction.currency",
+]
+DEFAULT_FIELDS_TO_IGNORE = ["user_id", "card_number"]
 
 
-def process_single_query(
-    natural_language_query: str,
-    es_host: str,
-    index_name: str,
-    category_fields: Optional[List[str]] = None,
-    fields_to_ignore: Optional[List[str]] = None,
-    llm_model: str = "gpt-4o",
-    llm_api_key: Optional[str] = None,
-    execute: bool = True,
-) -> Dict[str, Any]:
-    """
-    Process a single natural language query and return the result.
-    
-    Args:
-        natural_language_query: Natural language query string
-        es_host: Elasticsearch host URL
-        index_name: Elasticsearch index name
-        category_fields: List of fields to treat as categories
-        fields_to_ignore: List of fields to ignore
-        llm_model: LLM model name
-        llm_api_key: LLM API key
-        execute: If True, execute the query and return results
-        
-    Returns:
-        Dictionary with query, filters, elasticsearch queries, and optionally results
-    """
-    client = ElasticsearchModelGenerator(
-        es_host=es_host,
-        index_name=index_name,
-        category_fields=category_fields or [],
-        fields_to_ignore=fields_to_ignore or [],
-        model_name=llm_model,
-        api_key=llm_api_key or "",
+def setup_orchestrator():
+    """Setup Elasticsearch orchestrator with transaction index."""
+    return QueryOrchestrator.from_elasticsearch(
+        es_host=DEFAULT_ES_HOST,
+        index_name=DEFAULT_INDEX_NAME,
+        category_fields=DEFAULT_CATEGORY_FIELDS,
+        fields_to_ignore=DEFAULT_FIELDS_TO_IGNORE,
+        llm_model="gpt-4o",
+        llm_api_key=os.getenv("OPENAI_API_KEY"),
     )
+
+
+async def example_1_filtering_sorting_limiting(orchestrator):
+    """
+    Example 1: Filtering, Sorting, and Limiting
     
-    return client.Query(natural_language_query, execute=execute)
+    Tests:
+    - Filter by card_type (is)
+    - Filter by currency (is)
+    - Filter by amount range (between)
+    - Filter by receiver location (contains)
+    - Sort by amount (descending)
+    - Limit results (10)
+    """
+    
+    print("\n" + "=" * 80)
+    print("EXAMPLE 1: Filtering, Sorting, and Limiting")
+    print("=" * 80)
+    
+    query = "Show me the top 10 most expensive transactions with GOLD card and USD currency, where amount is between 1000 and 10000, and location contains 'New York'"
+    
+    print(f"\nNatural Language Query: {query}\n")
+    
+    result = await orchestrator.query(natural_language_query=query, execute=True)
+    
+    print("--- Extracted Filters ---")
+    print(json.dumps(result["extracted_filters"], indent=2))
+    
+    print("\n--- Generated Elasticsearch Query ---")
+    print(json.dumps(result["database_queries"][0], indent=2))
+    
+    if "results" in result:
+        res = result["results"][0]
+        print("\n--- Results ---")
+        print(f"Total Documents Found: {res['total_hits']}")
+        print(f"Documents Returned: {len(res['documents'])}")
+        
+        if res['documents']:
+            print("\nTop Transactions:")
+            for i, doc in enumerate(res['documents'][:10], 1):
+                print(f"\n  {i}. {doc.get('transaction', {}).get('receiver', {}).get('name', 'N/A')}")
+                print(f"     Card Type: {doc.get('card_type', 'N/A')}")
+                print(f"     Amount: {doc.get('transaction', {}).get('amount', 0):,} {doc.get('transaction', {}).get('currency', 'N/A')}")
+                print(f"     Location: {doc.get('transaction', {}).get('receiver', {}).get('location', 'N/A')}")
+                print(f"     Timestamp: {doc.get('transaction', {}).get('timestamp', 'N/A')}")
+
+
+async def example_2_aggregations_grouping_having(orchestrator):
+    """
+    Example 2: Aggregations with Grouping and Having Clause
+    
+    Tests:
+    - Group by card_type and transaction.type
+    - Sum aggregation (total amount)
+    - Average aggregation (average amount)
+    - Count aggregation (number of transactions)
+    - Having clause (filter groups with count > 5)
+    - Sort by total amount (descending)
+    """
+    
+    print("\n" + "=" * 80)
+    print("EXAMPLE 2: Aggregations with Grouping and Having Clause")
+    print("=" * 80)
+    
+    query = "What is the total transaction amount, average amount, and count grouped by card type and transaction type, for groups with more than 5 transactions, sorted by total amount descending"
+    
+    print(f"\nNatural Language Query: {query}\n")
+    
+    result = await orchestrator.query(natural_language_query=query, execute=True)
+    
+    print("--- Extracted Filters ---")
+    print(json.dumps(result["extracted_filters"], indent=2))
+    
+    print("\n--- Generated Elasticsearch Query ---")
+    print(json.dumps(result["database_queries"][0], indent=2))
+    
+    if "results" in result:
+        res = result["results"][0]
+        print("\n--- Results ---")
+        print(f"Total Groups Found: {res['total_hits']}")
+        print(f"Groups Returned: {len(res['documents'])}")
+        
+        if res['documents']:
+            print("\nAggregation Results (Groups with >5 transactions):")
+            for i, doc in enumerate(res['documents'][:15], 1):
+                # Elasticsearch aggregation results structure
+                card_type = doc.get('key', {}).get('card_type', 'N/A') if isinstance(doc.get('key'), dict) else doc.get('card_type', 'N/A')
+                txn_type = doc.get('key', {}).get('transaction.type', 'N/A') if isinstance(doc.get('key'), dict) else doc.get('transaction.type', 'N/A')
+                
+                total = doc.get('total_amount', {}).get('value', 0) if isinstance(doc.get('total_amount'), dict) else doc.get('total_amount', 0)
+                avg = doc.get('avg_amount', {}).get('value', 0) if isinstance(doc.get('avg_amount'), dict) else doc.get('avg_amount', 0)
+                count = doc.get('doc_count', 0)
+                
+                print(f"\n  {i}. Card: {card_type}, Type: {txn_type}")
+                print(f"     Total Amount: {total:,.0f}")
+                print(f"     Average Amount: {avg:,.2f}")
+                print(f"     Transaction Count: {count}")
+
+
+async def example_3_date_range_monthly_aggregations(orchestrator):
+    """
+    Example 3: Date Range Filtering with Monthly Grouping and Aggregations
+    
+    Tests:
+    - Date range filtering (last year)
+    - Filter by card_kind (is)
+    - Filter by currency (is)
+    - Group by timestamp (monthly interval)
+    - Multiple aggregations (sum, avg, count)
+    - Sort by grouped date
+    """
+    
+    print("\n" + "=" * 80)
+    print("EXAMPLE 3: Date Range with Monthly Grouping and Aggregations")
+    print("=" * 80)
+    
+    query = "Show me the total transaction amount, average amount, and count grouped by month for CREDIT card transactions with USD currency from last year, sorted by month"
+    
+    print(f"\nNatural Language Query: {query}\n")
+    
+    result = await orchestrator.query(natural_language_query=query, execute=True)
+    
+    print("--- Extracted Filters ---")
+    print(json.dumps(result["extracted_filters"], indent=2))
+    
+    print("\n--- Generated Elasticsearch Query ---")
+    print(json.dumps(result["database_queries"][0], indent=2))
+    
+    if "results" in result:
+        res = result["results"][0]
+        print("\n--- Results ---")
+        print(f"Total Monthly Groups: {res['total_hits']}")
+        print(f"Groups Returned: {len(res['documents'])}")
+        
+        if res['documents']:
+            print("\nMonthly Aggregation Results (CREDIT, USD, Last Year):")
+            for i, doc in enumerate(res['documents'], 1):
+                # Elasticsearch date histogram aggregation structure
+                month = doc.get('key_as_string', doc.get('key', 'N/A'))
+                
+                total = doc.get('total_amount', {}).get('value', 0) if isinstance(doc.get('total_amount'), dict) else doc.get('total_amount', 0)
+                avg = doc.get('avg_amount', {}).get('value', 0) if isinstance(doc.get('avg_amount'), dict) else doc.get('avg_amount', 0)
+                count = doc.get('doc_count', 0)
+                
+                print(f"\n  {i}. Month: {month}")
+                print(f"     Total Amount: {total:,.0f} USD")
+                print(f"     Average Amount: {avg:,.2f} USD")
+                print(f"     Transaction Count: {count}")
+
+
+async def main():
+    """Main async function to run all examples."""
+    print("\n" + "=" * 80)
+    print("ELASTICSEARCH QUERY BUILDER - 3 COMPREHENSIVE EXAMPLES")
+    print("=" * 80)
+    
+    try:
+        orchestrator = setup_orchestrator()
+        
+        print("\n--- Schema Summary ---")
+        orchestrator.print_model_summary()
+        
+        # Run all 3 examples
+        await example_1_filtering_sorting_limiting(orchestrator)
+        await example_2_aggregations_grouping_having(orchestrator)
+        await example_3_date_range_monthly_aggregations(orchestrator)
+        
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+        print("\nMake sure Elasticsearch is running and ELASTIC_HOST is configured in .env")
+        import traceback
+        traceback.print_exc()
+    
+    print("\n" + "=" * 80)
+    print("ALL EXAMPLES COMPLETED")
+    print("=" * 80)
 
 
 if __name__ == "__main__":
-    import os
-    from dotenv import load_dotenv
-    
-    load_dotenv()
-    
-    # Example usage
-    if len(sys.argv) > 1:
-        query = sys.argv[1]
-    else:
-        query = "Show me all my transactions from April 2024"
-    
-    result = process_single_query(
-        natural_language_query=query,
-        es_host=os.getenv("elastic_host", "http://localhost:9200"),
-        index_name="user_transactions",
-        category_fields=[
-            "card_kind",
-            "card_type",
-            "transaction.receiver.category_type",
-            "transaction.receiver.location",
-            "transaction.type",
-            "transaction.currency",
-        ],
-        fields_to_ignore=["user_id", "card_number"],
-        llm_model="gpt-4o",
-        llm_api_key=os.getenv("OPENAI_API_KEY"),
-        execute=True,
-    )
-    
-    print("\n" + "=" * 80)
-    print("QUERY RESULT")
-    print("=" * 80)
-    print(f"\nNatural Language Query: {result['natural_language_query']}")
-    print(f"\nExtracted Filters:\n{json.dumps(result['extracted_filters'], indent=2)}")
-    print(f"\nElasticsearch Queries:\n{json.dumps(result['elasticsearch_queries'], indent=2)}")
-    
-    if "results" in result:
-        for i, res in enumerate(result["results"]):
-            print(f"\n--- Result {i+1} ---")
-            print(f"Total Hits: {res.get('total_hits', 0)}")
-            print(f"Documents Returned: {len(res.get('documents', []))}")
-            if res.get('error'):
-                print(f"Error: {res['error']}")
+    asyncio.run(main())

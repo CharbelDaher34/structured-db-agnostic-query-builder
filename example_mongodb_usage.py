@@ -6,33 +6,40 @@ Example usage of the query builder with MongoDB.
 
 import os
 import json
+import asyncio
 from dotenv import load_dotenv
 from query_builder import QueryOrchestrator
 
 load_dotenv()
 
+DEFAULT_MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:vAF4jUA8Iq4amZaNPnQq87X9@84.16.230.94:27017/?authSource=admin")
+DEFAULT_DATABASE = os.getenv("MONGO_DATABASE", "visa_adcb")
+DEFAULT_COLLECTION = os.getenv("MONGO_COLLECTION", "llm_transactions")
+DEFAULT_CATEGORY_FIELDS = [
+    "transaction_location",
+    "transaction_currency",
+    "merchant_name",
+    "merchant_country",
+    "merchant_category_name",
+    "payment_card_name"
+]
+DEFAULT_FIELDS_TO_IGNORE = ["converted_currency","merchant_category_description"]
 
 def setup_orchestrator():
     """Setup MongoDB orchestrator with transaction collection."""
     return QueryOrchestrator.from_mongodb(
-        mongo_uri=os.getenv("MONGO_URI", "mongodb://admin:vAF4jUA8Iq4amZaNPnQq87X9@84.16.230.94:27017/?authSource=admin"),
-        database_name="visa_adcb",
-        collection_name="transactions_test_2",
-        category_fields=[
-            "channel",
-            "currency",
-            "merchantCountry",
-            "targetCurrency",
-            "source",
-        ],
-        fields_to_ignore=["accountId", "cardUsed"],
-        llm_model="gpt-4o",
+        mongo_uri=DEFAULT_MONGO_URI,
+        database_name=DEFAULT_DATABASE,
+        collection_name=DEFAULT_COLLECTION,
+        category_fields=DEFAULT_CATEGORY_FIELDS,
+        fields_to_ignore=DEFAULT_FIELDS_TO_IGNORE,
+        llm_model="gpt-4.1",
         llm_api_key=os.getenv("OPENAI_API_KEY"),
         sample_size=1000,
     )
 
 
-def example_1_filtering_sorting_limiting(orchestrator):
+async def example_1_filtering_sorting_limiting(orchestrator):
     """
     Example 1: Filtering, Sorting, and Limiting
     
@@ -53,7 +60,7 @@ def example_1_filtering_sorting_limiting(orchestrator):
     
     print(f"\nNatural Language Query: {query}\n")
     
-    result = orchestrator.query(query, execute=True)
+    result = await orchestrator.query(natural_language_query=query, execute=True)
     
     print("--- Extracted Filters ---")
     print(json.dumps(result["extracted_filters"], indent=2))
@@ -63,7 +70,7 @@ def example_1_filtering_sorting_limiting(orchestrator):
     
     if "results" in result:
         res = result["results"][0]
-        print(f"\n--- Results ---")
+        print("\n--- Results ---")
         print(f"Total Documents Found: {res['total_hits']}")
         print(f"Documents Returned: {len(res['documents'])}")
         
@@ -79,7 +86,7 @@ def example_1_filtering_sorting_limiting(orchestrator):
                 print(f"     Timestamp: {doc.get('timestamp', 'N/A')}")
 
 
-def example_2_aggregations_grouping_having(orchestrator):
+async def example_2_aggregations_grouping_having(orchestrator):
     """
     Example 2: Aggregations with Grouping and Having Clause
     
@@ -100,7 +107,7 @@ def example_2_aggregations_grouping_having(orchestrator):
     
     print(f"\nNatural Language Query: {query}\n")
     
-    result = orchestrator.query(query, execute=True)
+    result = await orchestrator.query(natural_language_query=query, execute=True)
     
     print("--- Extracted Filters ---")
     print(json.dumps(result["extracted_filters"], indent=2))
@@ -110,7 +117,7 @@ def example_2_aggregations_grouping_having(orchestrator):
     
     if "results" in result:
         res = result["results"][0]
-        print(f"\n--- Results ---")
+        print("\n--- Results ---")
         print(f"Total Groups Found: {res['total_hits']}")
         print(f"Groups Returned: {len(res['documents'])}")
         
@@ -139,7 +146,7 @@ def example_2_aggregations_grouping_having(orchestrator):
                 print(f"     Transaction Count: {count}")
 
 
-def example_3_date_range_monthly_aggregations(orchestrator):
+async def example_3_date_range_monthly_aggregations(orchestrator):
     """
     Example 3: Date Range Filtering with Monthly Grouping and Aggregations
     
@@ -160,7 +167,7 @@ def example_3_date_range_monthly_aggregations(orchestrator):
     
     print(f"\nNatural Language Query: {query}\n")
     
-    result = orchestrator.query(query, execute=True)
+    result = await orchestrator.query(natural_language_query=query, execute=True)
     
     print("--- Extracted Filters ---")
     print(json.dumps(result["extracted_filters"], indent=2))
@@ -170,7 +177,7 @@ def example_3_date_range_monthly_aggregations(orchestrator):
     
     if "results" in result:
         res = result["results"][0]
-        print(f"\n--- Results ---")
+        print("\n--- Results ---")
         print(f"Total Monthly Groups: {res['total_hits']}")
         print(f"Groups Returned: {len(res['documents'])}")
         
@@ -196,7 +203,8 @@ def example_3_date_range_monthly_aggregations(orchestrator):
                 print(f"     Transaction Count: {count}")
 
 
-if __name__ == "__main__":
+async def main():
+    """Main async function to run all examples."""
     print("\n" + "=" * 80)
     print("MONGODB QUERY BUILDER - 3 COMPREHENSIVE EXAMPLES")
     print("=" * 80)
@@ -208,9 +216,9 @@ if __name__ == "__main__":
         orchestrator.print_model_summary()
         
         # Run all 3 examples
-        example_1_filtering_sorting_limiting(orchestrator)
-        example_2_aggregations_grouping_having(orchestrator)
-        example_3_date_range_monthly_aggregations(orchestrator)
+        await example_1_filtering_sorting_limiting(orchestrator)
+        await example_2_aggregations_grouping_having(orchestrator)
+        await example_3_date_range_monthly_aggregations(orchestrator)
         
     except Exception as e:
         print(f"\n❌ Error: {e}")
@@ -221,3 +229,7 @@ if __name__ == "__main__":
     print("\n" + "=" * 80)
     print("ALL EXAMPLES COMPLETED")
     print("=" * 80)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

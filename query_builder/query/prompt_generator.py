@@ -45,23 +45,47 @@ This is the data you can query. Fields are specified as `object.field`.
 ### 3. How to Build the JSON Filter
 Your entire output must be a single JSON object with one key, `filters`. This key holds a list of "slices". Each slice represents a set of data.
 
-#### Supported Operators
-| Symbol | Meaning | Allowed on |
-|---|---|---|
-| `<` | less than | number, date |
-| `>` | greater than | number, date |
-| `isin` | value in list | any |
-| `notin` | value not in list | any |
-| `is` | equals | any |
-| `different` | not equal | any |
-| `between` | range (for dates) | date |
-| `contains` | partial string match | string |
-| `exists` | field is not null | any (use `true`) |
+Each slice has "conditions": [list of filter objects]. Use the structure matching the field's type from the schema and specify the "type" field:
+
+- For string fields: {{"type": "StringFilter", "field": "...", "operator": "is/contains/etc", "value": "text" or ["text1", "text2"]}}
+- For number fields: {{"type": "NumberFilter", "field": "...", "operator": "< / > / between / etc", "value": 100 or [100, 200]}}
+- For date fields: {{"type": "DateFilter", "field": "...", "operator": "< / > / between / etc", "value": "2024-01-01" or ["2024-01-01", "2024-12-31"]}}
+- For boolean fields: {{"type": "BooleanFilter", "field": "...", "operator": "is", "value": true}}
+- For enum fields: {{"type": "EnumFilter", "field": "...", "operator": "is/isin/etc", "value": "value" or ["value1", "value2"]}}
+
+Supported Operators by Type:
+- String: is, different, contains, isin, notin, exists
+- Number: <, >, is, different, between, isin, notin, exists
+- Date: <, >, is, different, between, exists
+- Boolean: is, different, exists
+- Enum: is, different, isin, notin, exists
+
+Example Filter:
+{{
+  "filters": [
+    {{
+      "conditions": [
+        {{
+          "type": "StringFilter",
+          "field": "merchant.name",
+          "operator": "contains",
+          "value": "Starbucks"
+        }},
+        {{
+          "type": "NumberFilter",
+          "field": "transaction.amount",
+          "operator": ">",
+          "value": 100
+        }}
+      ]
+    }}
+  ]
+}}
 
 #### Slice Options
 Each slice in the `filters` list can have these keys:
-- `conditions`: A list of filter conditions.
-- `sort`: A list of fields to sort by asc or desc (e.g., `[{{\\"field\\": \\"transaction.amount\\", \\"order\\": \\"desc\\"}}]`).
+- `conditions`: A list of filter conditions (as above)
+- `sort`: A list of fields to sort by asc or desc (e.g., `[{{\\"field\\": \\"transaction.amount\\", \\"order\\": \\"desc\\"}}]`)
 - `limit`: The maximum number of results to return.
 - `group_by`: A list of fields to group by.
 - `aggregations`: A list of calculations to perform on groups (e.g., `[{{\\"field\\": \\"transaction.amount\\", \\"type\\": \\"sum\\"}}]`). An aggregation can also include a `having_operator` and `having_value` to filter groups based on the result.
@@ -79,15 +103,15 @@ Each slice in the `filters` list can have these keys:
 #### Example 1: Simple Filtering
 **User**: "what were my transactions at starbucks?"
 ```json
-{{{{
+{{
   "filters": [
-    {{{{
+    {{
       "conditions": [
-        {{{{ "field": "transaction.receiver.name", "operator": "is", "value": "Starbucks" }}}}
+        {{ "type": "StringFilter", "field": "transaction.receiver.name", "operator": "is", "value": "Starbucks" }}
       ]
-    }}}}
+    }}
   ]
-}}}}
+}}
 ```
 
 #### Example 2: Time-Based Aggregation
@@ -97,8 +121,8 @@ Each slice in the `filters` list can have these keys:
   "filters": [
     {{{{
       "conditions": [
-        {{{{ "field": "transaction.receiver.category_type", "operator": "is", "value": "food" }}}},
-        {{{{ "field": "transaction.timestamp", "operator": "between", "value": ["2024-01-01", "2024-12-31"] }}}}
+        {{{{ "type": "EnumFilter", "field": "transaction.receiver.category_type", "operator": "is", "value": "food" }}}},
+        {{{{ "type": "DateFilter", "field": "transaction.timestamp", "operator": "between", "value": ["2024-01-01", "2024-12-31"] }}}}
       ],
       "group_by": ["transaction.timestamp"],
       "interval": "month",
@@ -117,16 +141,16 @@ Each slice in the `filters` list can have these keys:
   "filters": [
     {{{{
       "conditions": [
-        {{{{ "field": "transaction.receiver.category_type", "operator": "is", "value": "flight" }}}},
-        {{{{ "field": "card_type", "operator": "is", "value": "GOLD" }}}},
-        {{{{ "field": "transaction.timestamp", "operator": "between", "value": ["2023-01-01", "2023-12-31"] }}}}
+        {{{{ "type": "EnumFilter", "field": "transaction.receiver.category_type", "operator": "is", "value": "flight" }}}},
+        {{{{ "type": "EnumFilter", "field": "card_type", "operator": "is", "value": "GOLD" }}}},
+        {{{{ "type": "DateFilter", "field": "transaction.timestamp", "operator": "between", "value": ["2023-01-01", "2023-12-31"] }}}}
       ]
     }}}},
     {{{{
       "conditions": [
-        {{{{ "field": "transaction.receiver.category_type", "operator": "is", "value": "hotel" }}}},
-        {{{{ "field": "card_type", "operator": "is", "value": "GOLD" }}}},
-        {{{{ "field": "transaction.timestamp", "operator": "between", "value": ["2023-01-01", "2023-12-31"] }}}}
+        {{{{ "type": "EnumFilter", "field": "transaction.receiver.category_type", "operator": "is", "value": "hotel" }}}},
+        {{{{ "type": "EnumFilter", "field": "card_type", "operator": "is", "value": "GOLD" }}}},
+        {{{{ "type": "DateFilter", "field": "transaction.timestamp", "operator": "between", "value": ["2023-01-01", "2023-12-31"] }}}}
       ]
     }}}}
   ]
@@ -140,7 +164,7 @@ Each slice in the `filters` list can have these keys:
   "filters": [
     {{{{
       "conditions": [
-        {{{{ "field": "transaction.receiver.location", "operator": "is", "value": "London" }}}}
+        {{{{ "type": "StringFilter", "field": "transaction.receiver.location", "operator": "is", "value": "London" }}}}
       ],
       "sort": [
         {{{{ "field": "transaction.amount", "order": "desc" }}}}
@@ -174,7 +198,7 @@ Each slice in the `filters` list can have these keys:
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 📤 **Your Task**
-After reading the user question, output **only** the corresponding JSON object (starting with `{{{{ "filters": [...] }}}}`). No extra explanation.
+After reading the user question, output **only** the corresponding JSON object (starting with `{{ "filters": [...] }}`). No extra explanation.
 ━━━━━━━━━━━━━━━━━━━━━━━
 """
 

@@ -41,6 +41,6 @@ class LLMConfig(BaseModel):
     
     model: str
     api_key: str
-    temperature: float = 0.0
+    temperature: float = 0
     max_tokens: Optional[int] = None
 
