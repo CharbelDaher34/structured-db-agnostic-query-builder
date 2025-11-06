@@ -19,7 +19,7 @@ class agent:
         output_type: Optional[type[BaseModel]] = None,
         api_key: str="",
         name: Optional[str] = None,
-        model_settings: Optional[Dict[str, Any]] = {"temperature": 0.2, "top_p": 0.95},
+        model_settings: Optional[Dict[str, Any]] = {"temperature": 0.0, "top_p": 1.0},
         retries: int = 3,
         tools: Optional[List[Any]] = None,
     ):

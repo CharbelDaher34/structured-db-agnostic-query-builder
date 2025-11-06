@@ -93,6 +93,7 @@ Each slice in the `filters` list can have these keys:
 
 ### 4. Critical Rules & Guardrails
 - **ALWAYS use the field names from the schema.** Do not invent fields. If a user's term is ambiguous (e.g., "category"), map it to the most likely schema field (e.g., `transaction.receiver.category_type`).
+- **For ENUM fields: ONLY use values from the provided list.** If the user requests a value not in the enum list, SKIP that condition entirely. Example: if user asks for "location = New York" but the enum values are ["London", "Paris", "Tokyo"], omit the location filter.
 - **`aggregations` and `interval` ONLY work with `group_by`.** If there is no `group_by`, do not use `aggregations` or `interval`.
 - **`interval` is ONLY for date fields.** Do not use it when grouping by non-date fields.
 - **Comparisons mean multiple slices.** If the user says "compare A with B", create two slices in the `filters` list. The first for A, the second for B.
@@ -195,6 +196,19 @@ Each slice in the `filters` list can have these keys:
   ]
 }}}}
 ```
+
+#### Example 6: Handling Invalid Enum Values
+**User**: "Show me transactions in New York" (but "transaction.receiver.location" only has values: ["London", "Paris", "Beirut", "Online"])
+```json
+{{{{
+  "filters": [
+    {{{{
+      "conditions": []
+    }}}}
+  ]
+}}}}
+```
+Note: Since "New York" is not in the valid enum values, the location filter is omitted. The query returns all transactions.
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 📤 **Your Task**

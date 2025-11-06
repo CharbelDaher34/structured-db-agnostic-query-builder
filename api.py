@@ -66,8 +66,6 @@ def get_orchestrator(
         collection_name=collection_name,
         category_fields=category_fields or DEFAULT_CATEGORY_FIELDS,
         fields_to_ignore=fields_to_ignore or DEFAULT_FIELDS_TO_IGNORE,
-        llm_model=os.getenv("LLM_MODEL", "gpt-4.1"),
-        llm_api_key=os.getenv("OPENAI_API_KEY"),
         sample_size=1000,
     )
 
@@ -109,7 +107,7 @@ async def convert_query(
 if __name__ == "__main__":
     import uvicorn
     
-    port = int(os.getenv("API_PORT", 8000))
+    port = int(os.getenv("API_PORT", "8000"))
     host = os.getenv("API_HOST", "0.0.0.0")
     
     uvicorn.run(app, host=host, port=port)

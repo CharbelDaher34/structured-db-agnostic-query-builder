@@ -23,7 +23,7 @@ class LLM:
         self,
         system_prompt: str,
         output_type: type[BaseModel],
-        model_settings: dict = {"temperature": 0.2, "top_p": 0.95},
+        model_settings: dict = {"temperature": 0, "top_p": 1.0},
         api_key: str = "",
         model: str = "gemini-2.0-flash",
     ):

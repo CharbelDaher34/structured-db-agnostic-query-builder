@@ -23,7 +23,7 @@ DEFAULT_CATEGORY_FIELDS = [
     "transaction.currency",
 ]
 DEFAULT_FIELDS_TO_IGNORE = ["user_id", "card_number"]
-
+print(DEFAULT_ES_HOST, DEFAULT_INDEX_NAME, DEFAULT_CATEGORY_FIELDS, DEFAULT_FIELDS_TO_IGNORE)
 
 def setup_orchestrator():
     """Setup Elasticsearch orchestrator with transaction index."""
@@ -32,8 +32,6 @@ def setup_orchestrator():
         index_name=DEFAULT_INDEX_NAME,
         category_fields=DEFAULT_CATEGORY_FIELDS,
         fields_to_ignore=DEFAULT_FIELDS_TO_IGNORE,
-        llm_model="gpt-4o",
-        llm_api_key=os.getenv("OPENAI_API_KEY"),
     )
 
 

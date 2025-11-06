@@ -1,219 +1,322 @@
-# FilterModelBuilder Class Description
+# Database Query Builder
 
-The `FilterModelBuilder` class transforms field metadata from Elasticsearch mappings into structured Pydantic models that can validate and process natural language queries. It acts as a bridge between raw field information and type-safe query structures.
+A database-agnostic natural language query builder that converts natural language queries into structured database queries (MongoDB aggregation pipelines and Elasticsearch queries) using LLM-powered structured output.
 
-## Input: `model_info`
+## Overview
 
-The primary input is `model_info` - a flattened dictionary containing field metadata from the `ModelBuilder` class.
+This project provides a clean, extensible architecture for converting natural language queries into database-specific query languages. It uses OpenAI's language models with structured Pydantic outputs to ensure type-safe query generation.
 
-### Example `model_info`:
+**Key Features:**
+- 🗣️ **Natural Language to Database Queries**: Convert plain English to MongoDB/Elasticsearch queries
+- 🔌 **Database Agnostic**: Clean adapter pattern supporting multiple databases
+- 🎯 **Type-Safe**: Full Pydantic validation for schema, filters, and queries
+- 🧠 **LLM-Powered**: Uses OpenAI GPT models with structured outputs
+- 🚀 **Production-Ready**: FastAPI REST API with async support
+- 🔍 **Schema Inference**: Automatic schema extraction from live databases
+- 📊 **Full Query Support**: Filtering, sorting, aggregations, grouping, having clauses, and time intervals
+
+## Architecture
+
+The project follows a **clean, layered architecture** with clear separation of concerns:
+
+```
+query_builder/
+├── core/                    # Core models and interfaces
+│   ├── models.py           # Shared data models (SchemaField, QueryResult, etc.)
+│   └── interfaces.py       # Database adapter interfaces (ISchemaExtractor, IQueryTranslator, etc.)
+│
+├── schema/                  # Schema extraction and model building
+│   ├── extractor.py        # Unified schema extraction layer
+│   ├── model_builder.py    # Pydantic model generation from schema
+│   └── type_mappings.py    # Database type to Python type mappings
+│
+├── query/                   # Query building and LLM interaction
+│   ├── filter_builder.py   # Builds Pydantic filter models for LLM
+│   ├── prompt_generator.py # Generates system prompts for LLM
+│   └── translator.py       # Translates filters to database queries
+│
+├── llm/                     # LLM client management
+│   └── client_factory.py   # LLM client factory (OpenAI, etc.)
+│
+├── execution/               # Query execution and result handling
+│   ├── executor.py         # Query execution layer
+│   └── result_formatter.py # Result formatting
+│
+├── adapters/                # Database-specific implementations
+│   ├── mongodb/            # MongoDB adapter
+│   │   ├── schema_extractor.py   # MongoDB schema inference
+│   │   ├── query_translator.py   # Filter → Aggregation pipeline
+│   │   └── executor.py           # MongoDB query execution
+│   │
+│   └── elasticsearch/      # Elasticsearch adapter
+│       ├── schema_extractor.py   # ES mapping extraction
+│       ├── query_translator.py   # Filter → ES query DSL
+│       └── executor.py           # ES query execution
+│
+└── orchestrator.py          # Main entry point - coordinates all layers
+```
+
+### Design Patterns
+
+1. **Adapter Pattern**: Database-specific implementations behind common interfaces
+2. **Factory Pattern**: LLM client creation with different providers
+3. **Builder Pattern**: Progressive model and filter construction
+4. **Strategy Pattern**: Pluggable translators and executors per database
+
+## Installation
+
+### Prerequisites
+- Python 3.13+
+- MongoDB or Elasticsearch instance (optional, for live testing)
+- OpenAI API key
+
+### Using UV (Recommended)
+
+```bash
+# Clone the repository
+git clone <repository-url>
+cd elastic_query_builder
+
+# Install dependencies with uv
+uv sync
+
+# Set up environment variables
+cp .env.example .env
+# Edit .env with your configuration
+```
+
+### Using pip
+
+```bash
+pip install -r requirements.txt
+```
+
+### Environment Variables
+
+Create a `.env` file in the project root:
+
+```env
+# OpenAI Configuration
+OPENAI_API_KEY=your-openai-api-key
+LLM_MODEL=gpt-4.1
+
+# MongoDB Configuration (if using MongoDB)
+MONGO_URI=mongodb://user:password@host:port/?authSource=admin
+MONGO_DATABASE=your_database
+MONGO_COLLECTION=your_collection
+
+# Elasticsearch Configuration (if using Elasticsearch)
+ES_HOST=http://localhost:9200
+ES_INDEX=your_index
+
+# API Configuration
+API_HOST=0.0.0.0
+API_PORT=8000
+```
+
+## Quick Start
+
+### 1. MongoDB Example
+
+```python
+import asyncio
+from query_builder import QueryOrchestrator
+
+async def main():
+    # Initialize orchestrator for MongoDB
+    orchestrator = QueryOrchestrator.from_mongodb(
+        mongo_uri="mongodb://localhost:27017",
+        database_name="mydb",
+        collection_name="transactions",
+        category_fields=["merchant_category", "currency"],  # Fields to sample for enums
+        fields_to_ignore=["internal_id"],  # Fields to exclude from queries
+        llm_model="gpt-4.1",
+        llm_api_key="your-api-key",
+        sample_size=1000,  # Documents to sample for schema inference
+    )
+    
+    # Natural language query
+    result = await orchestrator.query(
+        natural_language_query="Show me the top 10 most expensive transactions in France",
+        execute=True  # Set to False to only generate query without executing
+    )
+    
+    # Access results
+    print(f"Natural Language: {result['natural_language_query']}")
+    print(f"Generated Pipeline: {result['database_queries']}")
+    print(f"Results: {result['results']}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+### 2. Elasticsearch Example
+
+```python
+import asyncio
+from query_builder import QueryOrchestrator
+
+async def main():
+    # Initialize orchestrator for Elasticsearch
+    orchestrator = QueryOrchestrator.from_elasticsearch(
+        es_host="http://localhost:9200",
+        index_name="transactions",
+        category_fields=["category", "status"],
+        fields_to_ignore=["_internal"],
+        llm_model="gpt-4.1",
+        llm_api_key="your-api-key",
+    )
+    
+    # Natural language query
+    result = await orchestrator.query(
+        natural_language_query="What's the average transaction amount by category?",
+        execute=True
+    )
+    
+    print(result)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## REST API
+
+### Starting the API Server
+
+```bash
+# Using uv
+uv run api.py
+
+# Or with uvicorn directly
+uvicorn api:app --host 0.0.0.0 --port 8000
+```
+
+### API Endpoints
+
+#### POST `/query`
+
+Convert natural language query to database query (MongoDB).
+
+**Request:**
+```json
+{
+  "query": "Show me top 5 expensive transactions in USD",
+  "category_fields": ["merchant_name", "currency"],  // Optional
+  "fields_to_ignore": ["internal_field"]  // Optional
+}
+```
+
+**Response:**
+```json
+{
+  "natural_language_query": "Show me top 5 expensive transactions in USD",
+  "extracted_filters": {
+    "filters": [
+      {
+        "conditions": [
+          {
+            "type": "EnumFilter",
+            "field": "currency",
+            "operator": "is",
+            "value": "USD"
+          }
+        ],
+        "sort": [{"field": "amount", "order": "desc"}],
+        "limit": 5
+      }
+    ]
+  },
+  "database_queries": [
+    {
+      "pipeline": [
+        {"$match": {"currency": {"$eq": "USD"}}},
+        {"$sort": {"amount": -1}},
+        {"$limit": 5}
+      ]
+    }
+  ]
+}
+```
+
+## Core Components
+
+### 1. QueryOrchestrator
+
+The main entry point that coordinates all components.
+
+**Factory Methods:**
+- `QueryOrchestrator.from_mongodb(...)` - Create MongoDB orchestrator
+- `QueryOrchestrator.from_elasticsearch(...)` - Create Elasticsearch orchestrator
+
+**Methods:**
+- `async query(natural_language_query, execute=True)` - Convert and optionally execute query
+- `generate_model(model_name)` - Generate Pydantic model from schema
+- `get_model_info()` - Get flattened field information
+- `print_model_summary()` - Print schema summary
+
+### 2. Schema Components
+
+#### SchemaExtractor
+Unified layer that wraps database-specific schema extractors.
+
+#### ModelBuilder
+Generates Pydantic models from normalized schema:
+- Handles nested objects and arrays
+- Creates enums from category fields
+- Supports type validation
+
+**Schema Format:**
 ```python
 {
-    "card_type": {
-        "type": "enum", 
-        "values": ["GOLD", "SILVER", "PLATINUM"]
-    },
     "transaction.amount": {
         "type": "number"
+    },
+    "transaction.merchant_name": {
+        "type": "string"
     },
     "transaction.timestamp": {
         "type": "date"
     },
-    "transaction.receiver.name": {
-        "type": "string"
-    },
-    "transaction.receiver.category_type": {
+    "transaction.category": {
         "type": "enum",
-        "values": ["food", "travel", "shopping", "entertainment"]
-    },
-    "transaction.receiver.location": {
-        "type": "string"
-    },
-    "transaction.type": {
-        "type": "enum",
-        "values": ["Deposit", "Withdrawal", "Transfer"]
-    },
-    "transaction.currency": {
-        "type": "enum",
-        "values": ["USD", "EUR", "GBP"]
-    },
-    "transaction.items": {
-        "type": "array",
-        "item_type": "string"
+        "values": ["food", "travel", "shopping"]
     }
 }
 ```
 
-## Conversion to Filter Model
+### 3. Filter Components
 
-The `BuildFilterModel()` method creates a hierarchical Pydantic model structure:
+#### FilterModelBuilder
+Builds structured Pydantic models that LLM uses for output:
 
-### 1. **Dynamic Field Enum**
-```python
-# Creates enum from model_info keys
-FieldEnum = Enum("FieldEnum", {
-    "card_type": "card_type",
-    "transaction.amount": "transaction.amount",
-    "transaction.timestamp": "transaction.timestamp",
-    # ... all other fields
-})
-```
+**Filter Types:**
+- `StringFilter` - String field operators: `is`, `different`, `contains`, `isin`, `notin`, `exists`
+- `NumberFilter` - Number field operators: `<`, `>`, `is`, `different`, `between`, `isin`, `notin`, `exists`
+- `DateFilter` - Date field operators: `<`, `>`, `is`, `different`, `between`, `exists`
+- `BooleanFilter` - Boolean field operators: `is`, `different`, `exists`
+- `EnumFilter` - Enum field operators: `is`, `different`, `isin`, `notin`, `exists`
 
-### 2. **Supported Operators**
-```python
-class OperatorEnum(str, Enum):
-    lt = "<"         # Less than (number, date)
-    gt = ">"         # Greater than (number, date)
-    isin = "isin"    # Value in list (any)
-    notin = "notin"  # Value not in list (any)
-    eq = "is"        # Equals (any)
-    ne = "different" # Not equal (any)
-    be = "between"   # Range (number, date)
-    contains = "contains"  # Partial string match (string)
-    exists = "exists"      # Field exists/not exists (any, bool value)
-```
-
-### 3. **Core Filter Components**
-```python
-class Query(BaseModel):
-    field: FieldEnum                    # Must be from available fields
-    operator: OperatorEnum              # <, >, is, isin, contains, etc.
-    value: Union[str, int, float, bool, date, List[...], None]
-
-class SortField(BaseModel):
-    field: FieldEnum
-    order: SortOrderEnum                # asc, desc
-
-class Aggregation(BaseModel):
-    field: FieldEnum
-    type: AggregationEnum               # sum, avg, count, min, max
-    having_operator: Optional[OperatorEnum]
-    having_value: Optional[Union[str, int, float]]
-```
-
-### 4. **Complete Query Structure**
-```python
-class QuerySlice(BaseModel):
-    conditions: List[Query]             # AND-joined filters
-    sort: Optional[List[SortField]]     # Multi-field sorting
-    limit: Optional[int]                # Result limit
-    group_by: Optional[List[FieldEnum]] # Grouping fields
-    aggregations: Optional[List[Aggregation]]  # Calculations
-    interval: Optional[TimeIntervalEnum]       # day, week, month, year
-
-class QueryFilters(BaseModel):
-    filters: List[QuerySlice]           # Multiple slices for comparisons
-```
-
-## Filter Model Fields & Constraints
-
-### **Field-Level Constraints**
-
-1. **Field Validation**
-   - Only fields from `model_info` are allowed
-   - Dynamic enum prevents invalid field references
-
-2. **Operator Constraints**
-   ```python
-   # Numeric/Date only operators
-   if operator in ("<", ">", "between"):
-       if field_type not in ("number", "date"):
-           raise ValueError("Operator only for number/date fields")
-   
-   # String-specific operators
-   if operator == "contains":
-       if field_type != "string" or not isinstance(value, str):
-           raise ValueError("Expected string for contains")
-   
-   # List operators
-   if operator in ("isin", "notin"):
-       if not isinstance(value, list):
-           raise ValueError("Expected list for isin/notin")
-   
-   # Exists operator
-   if operator == "exists":
-       if not isinstance(value, bool):
-           raise ValueError("Expected bool (True=exists, False=not exists)")
-   ```
-
-3. **Value Type Validation**
-   ```python
-   # Enum value checking for list operators
-   if operator in ("isin", "notin") and field_type == "enum":
-       if not all(x in field_info.get("values", []) for x in value):
-           raise ValueError(f"Values must be in enum: {field_info['values']}")
-   
-   # Between operator validation
-   if operator == "between":
-       if not isinstance(value, list) or len(value) != 2:
-           raise ValueError("Between requires list of 2 values")
-   
-   # Note: "is" and "different" operators currently have no specific validation
-   # beyond basic type checking in the current implementation
-   ```
-
-### **Slice-Level Constraints**
-
-1. **Aggregation Dependencies**
-   ```python
-   # Aggregations require group_by
-   if not group_by and aggregations:
-       aggregations = None  # Auto-remove invalid aggregations
-   ```
-
-2. **Interval Constraints**
-   ```python
-   # Interval only for date fields in group_by
-   if interval and group_by:
-       has_date_field = any(
-           model_info.get(field.value, {}).get("type") == "date" 
-           for field in group_by
-       )
-       if not has_date_field:
-           interval = None  # Auto-remove invalid interval
-   ```
-
-3. **Logical Validation**
-   ```python
-   # Remove null field conditions
-   for query in conditions:
-       if query.field.value == "null":
-           conditions.remove(query)
-   ```
-
-## Example Filter Model Output
-
-Given the `model_info` above, a valid filter model instance might look like:
-
+**Query Structure:**
 ```python
 {
-    "filters": [
+    "filters": [  # List of query slices (for comparisons)
         {
-            "conditions": [
+            "conditions": [  # AND-joined filters
                 {
-                    "field": "transaction.receiver.category_type",
+                    "type": "EnumFilter",
+                    "field": "category",
                     "operator": "is",
                     "value": "food"
-                },
-                {
-                    "field": "transaction.amount",
-                    "operator": ">",
-                    "value": 50.0
                 }
             ],
-            "sort": [
-                {
-                    "field": "transaction.timestamp",
-                    "order": "desc"
-                }
-            ],
+            "sort": [{"field": "amount", "order": "desc"}],
             "limit": 10,
-            "group_by": ["transaction.timestamp"],
-            "interval": "month",
+            "group_by": ["timestamp"],
+            "interval": "month",  # day, week, month, year
             "aggregations": [
                 {
-                    "field": "transaction.amount",
-                    "type": "sum",
+                    "field": "amount",
+                    "type": "sum",  # sum, avg, count, min, max
                     "having_operator": ">",
                     "having_value": 1000
                 }
@@ -223,434 +326,408 @@ Given the `model_info` above, a valid filter model instance might look like:
 }
 ```
 
-## Summary
+#### PromptGenerator
+Generates system prompts for the LLM with:
+- Available fields and their types
+- Valid operators per field type
+- Enum values for category fields
+- Query structure instructions
 
-The `FilterModelBuilder` takes raw field metadata and creates a comprehensive validation framework that:
-- **Ensures type safety** through dynamic enums and strict validation
-- **Prevents logical errors** via cross-field validation rules
-- **Supports complex queries** with grouping, aggregation, and sorting
-- **Auto-corrects invalid combinations** rather than failing
-- **Provides clear error messages** for debugging
+### 4. Query Translation
 
-This enables robust natural language to database query conversion with minimal runtime errors.
+#### QueryTranslator
+Wraps database-specific translators to convert structured filters to database queries.
 
----
+**MongoDB Translation:**
+- Filters → `$match` stages
+- Aggregations → `$group` stages
+- Time intervals → `$dateToString` with format
+- Having clauses → Post-group `$match`
+- Sort → `$sort` stage
+- Limit → `$limit` stage
 
-# Natural Language Query Capabilities
+**Elasticsearch Translation:**
+- Filters → Query DSL `must` clauses
+- Aggregations → `terms`, `sum`, `avg`, `count` aggregations
+- Date histograms → `date_histogram` with interval
+- Sort → `sort` array
+- Limit → `size` parameter
 
-The filter model can handle a wide variety of natural language queries and convert them into structured filters. Here are the main categories and examples:
+### 5. Query Execution
 
-## Query Types Supported
+#### QueryExecutor
+Executes database queries and formats results into standardized `QueryResult` format:
 
-### 1. **Simple Filtering Queries**
-Natural language queries that filter data based on specific criteria.
+```python
+{
+    "total_hits": 100,
+    "documents": [...],  # List of result documents
+    "aggregations": {...},  # Aggregation results (if any)
+    "success": True,
+    "error": None,
+    "metadata": {...}
+}
+```
 
-**Examples:**
-- *"Show me all food transactions"*
-- *"Find transactions over $100"*
-- *"What are my gold card purchases?"*
-- *"List all deposits in USD"*
+## Query Capabilities
+
+### Supported Query Types
+
+#### 1. Simple Filtering
+```
+"Show me all food transactions"
+"Find transactions over $100"
+"What are transactions in France?"
+```
+
+#### 2. Range Queries
+```
+"Show transactions between $50 and $200"
+"Find purchases from last month"
+"Transactions from 2024"
+```
+
+#### 3. Multiple Conditions (AND-joined)
+```
+"Show me food transactions over $50 in France"
+"Find travel expenses in London paid with EUR"
+```
+
+#### 4. Aggregations and Grouping
+```
+"How much did I spend on food each month?"
+"Show me total spending by category"
+"What's my average transaction amount by location?"
+"Count transactions by merchant"
+```
+
+#### 5. Sorting and Limiting
+```
+"Show me my top 5 most expensive transactions"
+"List recent deposits, newest first"
+"What are my smallest 10 withdrawals?"
+```
+
+#### 6. Comparison Queries (Multiple Slices)
+```
+"Compare my spending on food vs travel"
+"Show gold card vs silver card transaction totals"
+"Compare this year's deposits with last year's"
+```
+
+#### 7. Having Clauses (Post-Aggregation Filters)
+```
+"Show categories where total spending exceeds $1000"
+"Which merchants have more than 10 transactions?"
+```
+
+#### 8. Time-Based Grouping
+```
+"Show daily transaction volume for last week"
+"Monthly spending trends for this year"
+"Weekly average transaction amount"
+```
+
+#### 9. Exclusion Queries
+```
+"Show all transactions except food and travel"
+"Transactions that don't have a location"
+"Exclude USD currency"
+```
+
+#### 10. Partial Text Matching
+```
+"Find transactions containing 'Starbucks'"
+"Show payments to stores with 'Market' in the name"
+```
+
+### Complex Query Example
+
+**Natural Language:**
+```
+"Show me my top 10 most expensive food and travel transactions from 
+France in USD, grouped by month, where monthly total exceeds $1000"
+```
 
 **Generated Filter:**
 ```json
 {
-  "filters": [
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.category_type",
-          "operator": "is",
-          "value": "food"
-        }
-      ]
-    }
-  ]
+  "filters": [{
+    "conditions": [
+      {
+        "type": "EnumFilter",
+        "field": "transaction.category",
+        "operator": "isin",
+        "value": ["food", "travel"]
+      },
+      {
+        "type": "StringFilter",
+        "field": "transaction.country",
+        "operator": "is",
+        "value": "France"
+      },
+      {
+        "type": "EnumFilter",
+        "field": "transaction.currency",
+        "operator": "is",
+        "value": "USD"
+      }
+    ],
+    "sort": [{"field": "transaction.amount", "order": "desc"}],
+    "limit": 10,
+    "group_by": ["transaction.timestamp"],
+    "interval": "month",
+    "aggregations": [{
+      "field": "transaction.amount",
+      "type": "sum",
+      "having_operator": ">",
+      "having_value": 1000
+    }]
+  }]
 }
 ```
 
-### 2. **Range and Date Queries**
-Queries involving numerical ranges, date ranges, and time periods.
+## Database Adapters
 
-**Examples:**
-- *"Show transactions between $50 and $200"*
-- *"Find all purchases from last month"*
-- *"What transactions happened in 2024?"*
-- *"Show me withdrawals over €500"*
+### Adding a New Database
 
-**Generated Filter:**
-```json
-{
-  "filters": [
-    {
-      "conditions": [
-        {
-          "field": "transaction.amount",
-          "operator": "between",
-          "value": [50, 200]
-        }
-      ]
-    }
-  ]
-}
+To add support for a new database:
+
+1. **Create adapter directory**: `query_builder/adapters/newdb/`
+
+2. **Implement interfaces**:
+   ```python
+   # schema_extractor.py
+   from query_builder.core.interfaces import ISchemaExtractor
+   
+   class NewDBSchemaExtractor(ISchemaExtractor):
+       def get_schema(self) -> Dict[str, Any]:
+           # Return normalized schema
+           pass
+       
+       def get_enum_fields(self) -> Dict[str, List[Any]]:
+           # Return enum values for category fields
+           pass
+   ```
+
+   ```python
+   # query_translator.py
+   from query_builder.core.interfaces import IQueryTranslator
+   
+   class NewDBQueryTranslator(IQueryTranslator):
+       def translate(self, filters: Dict[str, Any], 
+                    model_info: Dict[str, Any]) -> List[Dict[str, Any]]:
+           # Convert structured filters to DB queries
+           pass
+   ```
+
+   ```python
+   # executor.py
+   from query_builder.core.interfaces import IQueryExecutor
+   
+   class NewDBQueryExecutor(IQueryExecutor):
+       def execute(self, queries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+           # Execute queries and return results
+           pass
+       
+       def execute_raw(self, query: Dict[str, Any], size: int) -> Dict[str, Any]:
+           # Execute raw query
+           pass
+   ```
+
+3. **Add factory method** to `QueryOrchestrator`:
+   ```python
+   @classmethod
+   def from_newdb(cls, ...):
+       schema_extractor = NewDBSchemaExtractor(...)
+       query_translator = NewDBQueryTranslator()
+       query_executor = NewDBQueryExecutor(...)
+       
+       return cls(
+           schema_extractor=schema_extractor,
+           query_translator=query_translator,
+           query_executor=query_executor,
+           ...
+       )
+   ```
+
+## Testing
+
+### Run Example Scripts
+
+**MongoDB Example:**
+```bash
+uv run example_mongodb_usage.py
 ```
 
-### 3. **Multiple Condition Queries**
-Complex queries with multiple AND-joined conditions.
+This runs 3 comprehensive examples:
+1. Filtering, sorting, and limiting
+2. Aggregations with grouping and having clauses
+3. Date range filtering with monthly aggregations
 
-**Examples:**
-- *"Show me food transactions over $50 from my gold card"*
-- *"Find all travel expenses in London paid with EUR"*
-- *"What are my online shopping purchases under $100?"*
-
-**Generated Filter:**
-```json
-{
-  "filters": [
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.category_type",
-          "operator": "is",
-          "value": "food"
-        },
-        {
-          "field": "transaction.amount",
-          "operator": ">",
-          "value": 50
-        },
-        {
-          "field": "card_type",
-          "operator": "is",
-          "value": "GOLD"
-        }
-      ]
-    }
-  ]
-}
+**Test Improvements:**
+```bash
+uv run test_improvements.py
 ```
 
-### 4. **Aggregation and Grouping Queries**
-Queries that require grouping data and performing calculations.
+### Manual Testing
 
-**Examples:**
-- *"How much did I spend on food each month?"*
-- *"Show me total spending by category"*
-- *"What's my average transaction amount by location?"*
-- *"Count my transactions by card type"*
+```python
+import asyncio
+from query_builder import QueryOrchestrator
 
-**Generated Filter:**
-```json
-{
-  "filters": [
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.category_type",
-          "operator": "is",
-          "value": "food"
-        }
-      ],
-      "group_by": ["transaction.timestamp"],
-      "interval": "month",
-      "aggregations": [
-        {
-          "field": "transaction.amount",
-          "type": "sum"
-        }
-      ]
-    }
-  ]
-}
+async def test():
+    orchestrator = QueryOrchestrator.from_mongodb(
+        mongo_uri="mongodb://localhost:27017",
+        database_name="test_db",
+        collection_name="test_collection",
+        llm_model="gpt-4.1",
+        llm_api_key="your-key"
+    )
+    
+    # Test schema extraction
+    orchestrator.print_model_summary()
+    
+    # Test query conversion
+    result = await orchestrator.query(
+        "Show me the top 10 transactions",
+        execute=False  # Just generate query
+    )
+    print(result)
+
+asyncio.run(test())
 ```
 
-### 5. **Sorting and Limiting Queries**
-Queries that need specific ordering or result limits.
+## Project Structure
 
-**Examples:**
-- *"Show me my top 5 most expensive transactions"*
-- *"List my recent deposits, newest first"*
-- *"What are my smallest 10 withdrawals?"*
-
-**Generated Filter:**
-```json
-{
-  "filters": [
-    {
-      "conditions": [],
-      "sort": [
-        {
-          "field": "transaction.amount",
-          "order": "desc"
-        }
-      ],
-      "limit": 5
-    }
-  ]
-}
+```
+.
+├── api.py                          # FastAPI REST API
+├── example_mongodb_usage.py        # MongoDB usage examples
+├── test_improvements.py            # Test suite
+├── requirements.txt                # Pip dependencies
+├── pyproject.toml                  # UV/Poetry project config
+├── query_builder/                  # Main package
+│   ├── __init__.py                # Package exports
+│   ├── orchestrator.py            # Main orchestrator
+│   ├── core/                      # Core models and interfaces
+│   ├── schema/                    # Schema extraction and model building
+│   ├── query/                     # Query building and LLM interaction
+│   ├── llm/                       # LLM client management
+│   ├── execution/                 # Query execution
+│   └── adapters/                  # Database-specific implementations
+│       ├── mongodb/
+│       └── elasticsearch/
+└── README.md
 ```
 
-### 6. **Comparison Queries**
-Queries that compare different slices of data side-by-side.
+## Dependencies
 
-**Examples:**
-- *"Compare my spending on food vs travel"*
-- *"Show gold card vs silver card transaction totals"*
-- *"Compare this year's deposits with last year's"*
-- *"Using only the last 3 months, compare my spending on food vs travel"*
+**Core:**
+- `pydantic` (>=2.11.7) - Data validation and models
+- `pydantic-ai` (>=0.4.0) - LLM structured outputs
 
-**Generated Filter:**
-```json
-{
-  "filters": [
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.category_type",
-          "operator": "is",
-          "value": "food"
-        }
-      ]
-    },
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.category_type",
-          "operator": "is",
-          "value": "travel"
-        }
-      ]
-    }
-  ]
-}
+**Database Drivers:**
+- `pymongo` (>=4.13.2) - MongoDB client
+- `elasticsearch` (==8.11.1) - Elasticsearch client
+
+**API:**
+- `fastapi` (>=0.116.0) - Web framework
+- `uvicorn` - ASGI server
+
+**Utilities:**
+- `pandas` (>=2.3.1) - Data processing
+- `openpyxl` (>=3.1.5) - Excel file handling
+
+## Configuration
+
+### Category Fields
+
+Fields specified in `category_fields` will be:
+1. Sampled from the database to extract distinct values
+2. Converted to enum types in the Pydantic model
+3. Validated against the enum values in queries
+
+**Example:**
+```python
+category_fields=["merchant_category", "currency", "country"]
 ```
 
-**Real-World Example with Date Constraints:**
-*"Using only the last 3 months, compare my spending on food vs travel"*
+### Fields to Ignore
 
-**Generated Filter:**
-```json
-{
-  "filters": [
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.category_type",
-          "operator": "is",
-          "value": "Restaurant"
-        },
-        {
-          "field": "transaction.timestamp",
-          "operator": "between",
-          "value": ["2025-04-18", "2025-07-18"]
-        }
-      ]
-    },
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.category_type",
-          "operator": "is",
-          "value": "Travel"
-        },
-        {
-          "field": "transaction.timestamp",
-          "operator": "between",
-          "value": ["2025-04-18", "2025-07-18"]
-        }
-      ]
-    }
-  ]
-}
+Fields in `fields_to_ignore` will be excluded from:
+- Schema extraction
+- Model generation
+- Query filtering
+
+**Example:**
+```python
+fields_to_ignore=["_id", "internal_id", "created_by"]
 ```
 
-### 7. **Exclusion and Negative Queries**
-Queries that exclude certain data or look for missing information.
+### Sample Size (MongoDB)
 
-**Examples:**
-- *"Show me all transactions except food and travel"*
-- *"Find transactions that don't have a location"*
-- *"What purchases were not made with my gold card?"*
+For MongoDB, `sample_size` controls how many documents are sampled for:
+- Schema inference (field types)
+- Enum value extraction
 
-**Generated Filter:**
-```json
-{
-  "filters": [
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.category_type",
-          "operator": "notin",
-          "value": ["food", "travel"]
-        }
-      ]
-    }
-  ]
-}
-```
+**Default:** 1000 documents
 
-### 8. **Partial Match Queries**
-Queries that search for partial text matches.
+## Best Practices
 
-**Examples:**
-- *"Find all transactions containing 'Starbucks'"*
-- *"Show me payments to stores with 'Market' in the name"*
-- *"What transactions have 'Online' in the description?"*
-
-**Generated Filter:**
-```json
-{
-  "filters": [
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.name",
-          "operator": "contains",
-          "value": "Starbucks"
-        }
-      ]
-    }
-  ]
-}
-```
-
-## Query Complexity Handling
-
-The filter model can handle increasingly complex queries by combining multiple features:
-
-### **Complex Example:**
-*"Show me my top 10 most expensive food and travel transactions from my gold card in London, grouped by month, where the total monthly spending was over $1000"*
-
-**Generated Filter:**
-```json
-{
-  "filters": [
-    {
-      "conditions": [
-        {
-          "field": "transaction.receiver.category_type",
-          "operator": "isin",
-          "value": ["food", "travel"]
-        },
-        {
-          "field": "card_type",
-          "operator": "is",
-          "value": "GOLD"
-        },
-        {
-          "field": "transaction.receiver.location",
-          "operator": "is",
-          "value": "London"
-        }
-      ],
-      "sort": [
-        {
-          "field": "transaction.amount",
-          "order": "desc"
-        }
-      ],
-      "limit": 10,
-      "group_by": ["transaction.timestamp"],
-      "interval": "month",
-      "aggregations": [
-        {
-          "field": "transaction.amount",
-          "type": "sum",
-          "having_operator": ">",
-          "having_value": 1000
-        }
-      ]
-    }
-  ]
-}
-```
+1. **Category Fields**: Only specify fields with reasonable cardinality (<1000 unique values)
+2. **Sample Size**: Increase for more accurate schema inference, decrease for faster startup
+3. **Field Naming**: Use consistent dot notation for nested fields (e.g., `transaction.amount`)
+4. **Error Handling**: Always wrap queries in try-except blocks
+5. **Async Usage**: Always use `await` with `orchestrator.query()`
+6. **Query Execution**: Set `execute=False` to validate queries without running them
 
 ## Limitations
 
-While powerful, the filter model has some limitations:
+1. **Single Index/Collection**: Designed for querying one data source at a time
+2. **Enum Cardinality**: High-cardinality fields (>1000 values) should not be category fields
+3. **Schema Changes**: Requires orchestrator recreation after schema changes
+4. **OR Conditions**: Not directly supported (use multiple slices for comparisons)
+5. **Nested Array Queries**: Limited support for complex array operations
 
-1. **Field Dependencies**: Can only query fields that exist in the `model_info`
-2. **Operator Constraints**: Some operators only work with specific field types
-3. **Validation Rules**: Enum values must match exactly what's in the schema
-4. **Single Index**: Designed for querying one Elasticsearch index at a time
+## Troubleshooting
 
-The system automatically handles edge cases and invalid combinations, making it robust for real-world natural language query processing.
+### "LLM not configured" Error
+Ensure you provide both `llm_model` and `llm_api_key` when creating the orchestrator.
 
----
+### Schema Extraction Fails
+- **MongoDB**: Check connection URI and ensure collection has documents
+- **Elasticsearch**: Verify index exists and mapping is accessible
 
-# API Endpoints
+### Invalid Enum Values
+Increase `sample_size` to ensure all possible enum values are captured during schema inference.
 
-The FastAPI application provides three main endpoints for converting natural language queries into Elasticsearch queries. All endpoints are built on top of the `FilterModelBuilder` and related classes.
+### Query Translation Errors
+Check that field names in generated filters match the schema exactly (including nested paths).
 
-## 1. `/query` - Database-Connected Endpoint
+## Contributing
 
-**Purpose**: Converts natural language to Elasticsearch queries using a live database connection (Db config are passed in the api code)
+1. Fork the repository
+2. Create a feature branch
+3. Implement your changes following the existing architecture
+4. Add tests for new functionality
+5. Submit a pull request
 
-### Input (`QueryRequest`)
-```python
-{
-    "user_input": str  # Natural language query from user
-}
-```
+## License
 
-### Output (`QueryResponse`)
-```python
-{
-    "natural_language_query": str,           # Original user query
-    "extracted_filters": Dict[str, Any],     # Structured filter object
-    "elasticsearch_queries": List[Dict[str, Any]]  # Ready-to-execute ES queries
-}
-```
+[Add your license here]
 
-### Process Flow
-1. **Schema Fetching**: Connects to Elasticsearch to get index mapping and distinct values for category fields
-2. **Model Generation**: Creates Pydantic models from the live schema
-3. **LLM Processing**: Uses AI to convert natural language to structured filters
-4. **DSL Conversion**: Transforms filters into Elasticsearch query DSL
+## Roadmap
 
----
+- [ ] PostgreSQL adapter
+- [ ] Support for OR conditions
+- [ ] Query result caching
+- [ ] Streaming results for large datasets
+- [ ] More LLM providers (Anthropic, local models)
+- [ ] GraphQL API
+- [ ] Query history and optimization
+- [ ] Web UI for query building
 
-## 2. `/query-from-mapping` - Mapping-Based Endpoint
+## Contact
 
-**Purpose**: Converts natural language to Elasticsearch queries using provided mapping data (no database connection required).
-
-### Input (`MappingQueryRequest`)
-```python
-{
-    "user_input": str,                    # Natural language query
-    "elasticsearch_mapping": Dict[str, Any],  # ES index mapping (properties section)
-    "enum_fields": Dict[str, List[Any]],     # Field names -> possible values
-    "fields_to_ignore": List[str]            # Fields to exclude from model
-}
-```
-
-**Example Input**:
-```json
-{
-    "user_input": "Compare my spending on travel vs food",
-    "elasticsearch_mapping": {
-        "transaction": {
-            "properties": {
-                "amount": {"type": "float"},
-                "receiver": {
-                    "properties": {
-                        "category_type": {"type": "keyword"}
-                    }
-                }
-            }
-        }
-    },
-    "enum_fields": {
-        "transaction.receiver.category_type": ["food", "travel", "shopping"]
-    },
-    "fields_to_ignore": ["user_id", "card_number"]
-}
-```
-
-### Output (`QueryResponse`)
-Same structure as `/query` endpoint - returns structured filters and Elasticsearch queries.
-
-### Process Flow
-1. **Schema Processing**: Uses provided mapping and enum values instead of fetching from database
-2. **Model Generation**: Creates Pydantic models from provided schema
-3. **LLM Processing**: Converts natural language to structured filters
-4. **DSL Conversion**: Transforms filters into Elasticsearch query DSL
+[Add contact information]

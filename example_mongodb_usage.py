@@ -33,8 +33,6 @@ def setup_orchestrator():
         collection_name=DEFAULT_COLLECTION,
         category_fields=DEFAULT_CATEGORY_FIELDS,
         fields_to_ignore=DEFAULT_FIELDS_TO_IGNORE,
-        llm_model="gpt-4.1",
-        llm_api_key=os.getenv("OPENAI_API_KEY"),
         sample_size=1000,
     )
 

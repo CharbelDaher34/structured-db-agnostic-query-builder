@@ -37,8 +37,6 @@ class QueryOrchestrator:
         query_executor: IQueryExecutor,
         category_fields: Optional[List[str]] = None,
         fields_to_ignore: Optional[List[str]] = None,
-        llm_model: Optional[str] = None,
-        llm_api_key: Optional[str] = None,
     ):
         """
         Initialize query orchestrator with database adapters.
@@ -70,8 +68,7 @@ class QueryOrchestrator:
         
         # LLM setup
         self.llm_factory: Optional[LLMClientFactory] = None
-        if llm_model and llm_api_key:
-            self.llm_factory = LLMClientFactory(llm_model, llm_api_key)
+        self.llm_factory = LLMClientFactory()
         
         # Cached components
         self._model_builder: Optional[ModelBuilder] = None
@@ -85,8 +82,6 @@ class QueryOrchestrator:
         index_name: str,
         category_fields: Optional[List[str]] = None,
         fields_to_ignore: Optional[List[str]] = None,
-        llm_model: Optional[str] = None,
-        llm_api_key: Optional[str] = None,
     ) -> "QueryOrchestrator":
         """
         Create orchestrator for Elasticsearch.
@@ -122,8 +117,6 @@ class QueryOrchestrator:
             query_executor=query_executor,
             category_fields=category_fields,
             fields_to_ignore=fields_to_ignore,
-            llm_model=llm_model,
-            llm_api_key=llm_api_key,
         )
     
     @classmethod
@@ -134,8 +127,6 @@ class QueryOrchestrator:
         collection_name: str,
         category_fields: Optional[List[str]] = None,
         fields_to_ignore: Optional[List[str]] = None,
-        llm_model: Optional[str] = None,
-        llm_api_key: Optional[str] = None,
         sample_size: int = 1000,
     ) -> "QueryOrchestrator":
         """
@@ -180,8 +171,6 @@ class QueryOrchestrator:
             query_executor=query_executor,
             category_fields=category_fields,
             fields_to_ignore=fields_to_ignore,
-            llm_model=llm_model,
-            llm_api_key=llm_api_key,
         )
     
     def _get_model_builder(self) -> ModelBuilder:
@@ -239,7 +228,7 @@ class QueryOrchestrator:
         model = self.generate_model()
         model_info = self.get_model_info()
         
-        print(f"\n=== Model Summary ===")
+        print("\n=== Model Summary ===")
         print(f"Model Class: {model.__name__}")
         print(f"Total Fields: {len(model_info)}")
         
@@ -271,7 +260,7 @@ class QueryOrchestrator:
             Dictionary with query, filters, and optionally results
         """
         if not self.llm_factory:
-            raise ValueError("LLM not configured. Provide llm_model and llm_api_key.")
+            raise ValueError("LLM not configured. Provide llm_model and llm_api_key in the constructor.")
         
         # Build filter model and prompt
         filter_builder = self._get_filter_builder()
@@ -281,8 +270,10 @@ class QueryOrchestrator:
         system_prompt = prompt_generator.generate_system_prompt()
         
         # Parse query with LLM (async)
-        filters = await self.llm_factory.parse_query_async(
-            natural_language_query, filter_model, system_prompt
+        filters = await self.llm_factory.parse_query(
+            inputs=natural_language_query,
+            filter_model=filter_model,
+            system_prompt=system_prompt
         )
         
         # Translate to database queries
