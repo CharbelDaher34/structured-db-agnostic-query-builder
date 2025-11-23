@@ -137,31 +137,10 @@ class LLMClientFactory:
         inputs: Union[InputType, List[InputType]],
         filter_model: Optional[type[BaseModel]] = None,
         system_prompt: str = '',
-    ) -> Dict[str, Any]:
+    ) -> Union[Dict[str, Any], BaseModel]:
         """
         Parse inputs asynchronously with multimodal support.
-        
-        Supports text, images, audio, video, and documents as inputs.
-        
-        Args:
-            inputs: Single input or list of inputs. Can be:
-                - str: Text query
-                - ImageUrl: Image from URL
-                - AudioUrl: Audio from URL
-                - VideoUrl: Video from URL
-                - DocumentUrl: Document from URL
-                - BinaryContent: Binary data (images, audio, video, documents)
-                - List of any of the above
-            filter_model: Optional Pydantic model for structured output.
-                         If provided, returns validated structured data.
-                         If None, returns raw string response.
-            system_prompt: System prompt with instructions
             
-        Returns:
-            Dict with parsed data. If filter_model provided, returns structured dict.
-            If filter_model is None, returns {"response": "raw_string"}
-            
-        Examples:
             # Structured output with filter_model
             result = await factory.parse_query(
                 inputs="Find high priority items",
@@ -208,11 +187,4 @@ class LLMClientFactory:
         
         result = await agent.run(input_data)
         
-        # Handle structured vs unstructured output
-        if filter_model is not None:
-            # Structured output - return as dict
-            return result.output.model_dump(mode="json")
-        else:
-            # Unstructured output - return raw string
-            return {"response": result.output}
-
+        return result.output

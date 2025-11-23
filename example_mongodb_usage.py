@@ -54,12 +54,11 @@ async def example_1_filtering_sorting_limiting(orchestrator):
     print("EXAMPLE 1: Filtering, Sorting, and Limiting")
     print("=" * 80)
     
-    query = "Show me the top 10 most expensive transactions in France with USD currency, where amount is between 5000 and 50000, and merchant name contains 'Five'"
+    query = "Show my top 10 spending records in France in USD, with amounts between $5,000 and $50,000, and merchant name containing ‘Five’."
     
     print(f"\nNatural Language Query: {query}\n")
     
     result = await orchestrator.query(natural_language_query=query, execute=True)
-    
     print("--- Extracted Filters ---")
     print(json.dumps(result["extracted_filters"], indent=2))
     
@@ -75,13 +74,7 @@ async def example_1_filtering_sorting_limiting(orchestrator):
         if res['documents']:
             print("\nTop Transactions:")
             for i, doc in enumerate(res['documents'][:10], 1):
-                print(f"\n  {i}. {doc.get('merchantName', 'N/A')}")
-                print(f"     Country: {doc.get('merchantCountry', 'N/A')}")
-                print(f"     Amount: {doc.get('amount', 0):,} {doc.get('currency', 'N/A')}")
-                print(f"     Amount After Discount: {doc.get('amountAfterDiscount', 0):,.2f}")
-                print(f"     Channel: {doc.get('channel', 'N/A')}")
-                print(f"     Location: {doc.get('transactionLocation', 'N/A')}")
-                print(f"     Timestamp: {doc.get('timestamp', 'N/A')}")
+                print(f"\n  {i}. {doc}")
 
 
 async def example_2_aggregations_grouping_having(orchestrator):

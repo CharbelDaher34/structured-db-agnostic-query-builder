@@ -276,6 +276,8 @@ class QueryOrchestrator:
             system_prompt=system_prompt
         )
         
+        filters = filters.model_dump(mode="json")
+        print(filters)
         # Translate to database queries
         model_info = self.get_model_info()
         db_queries = self.query_translator.translate(filters, model_info)

@@ -93,7 +93,9 @@ async def convert_query(
         
         # Convert query without executing
         result = await orchestrator.query(natural_language_query=request.query, execute=False)
-        
+        print(f"natural_language_query: {result['natural_language_query']}")
+        print(f"extracted_filters: {result['extracted_filters']}")
+        # print(f"database_queries: {result['database_queries']}")
         return QueryResponse(
             natural_language_query=result["natural_language_query"],
             extracted_filters=result["extracted_filters"],
