@@ -16,7 +16,7 @@ async def test_ollama():
     
     model_name = "qwen3:8b"
     base_url = "http://localhost:11434"
-    api_key = "dummy-key"
+    api_key = os.getenv("OLLAMA_API_KEY", "not-set")
     
     print("=" * 60)
     print("Ollama Connection Test")

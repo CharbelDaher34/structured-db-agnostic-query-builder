@@ -98,10 +98,11 @@ Each slice in the `filters` list can have these keys:
 - **`interval` is ONLY for date fields.** Do not use it when grouping by non-date fields.
 - **Comparisons mean multiple slices.** If the user says "compare A with B", create two slices in the `filters` list. The first for A, the second for B.
 - **Be precise with dates.** Convert relative dates like "last month" or "this year" into specific date ranges (e.g., `"operator": "between", "value": ["2024-01-01", "2024-12-31"]`).
+- **DO NOT add a `limit` unless the user explicitly specifies one** (e.g., "top 5", "first 10", "show me 20"). If the user says "show me my transactions" or "recent transactions" without a number, omit the `limit` field entirely.
 
 ### 5. Realistic Examples
 
-#### Example 1: Simple Filtering
+#### Example 1: Simple Filtering (NO LIMIT - User didn't specify a number)
 **User**: "what were my transactions at starbucks?"
 ```json
 {{
@@ -114,6 +115,7 @@ Each slice in the `filters` list can have these keys:
   ]
 }}
 ```
+**Note**: No `limit` field because the user didn't say "top 5" or "first 10", etc.
 
 #### Example 2: Time-Based Aggregation
 **User**: "How much did I spend on food each month this year?"
@@ -158,8 +160,8 @@ Each slice in the `filters` list can have these keys:
 }}}}
 ```
 
-#### Example 4: Complex Query with Sorting and Limiting
-**User**: "What were my top 5 most expensive transactions in London, and when did they happen?"
+#### Example 4: Complex Query with Sorting and Limiting (LIMIT ONLY WHEN USER SPECIFIES A NUMBER)
+**User**: "What were my **top 5** most expensive transactions in London, and when did they happen?"
 ```json
 {{{{
   "filters": [
@@ -175,6 +177,7 @@ Each slice in the `filters` list can have these keys:
   ]
 }}}}
 ```
+**Note**: The `limit: 5` is included ONLY because the user explicitly said "top 5". If they had said "show me my most expensive transactions in London", you would omit the `limit` field.
 
 #### Example 5: Having Clause
 **User**: "Show me all transactions on days where I made more than one purchase."
@@ -209,6 +212,22 @@ Each slice in the `filters` list can have these keys:
 }}}}
 ```
 Note: Since "New York" is not in the valid enum values, the location filter is omitted. The query returns all transactions.
+
+#### Example 7: "Recent" Transactions (NO LIMIT unless explicitly stated)
+**User**: "Show me my recent transactions"
+```json
+{{{{
+  "filters": [
+    {{{{
+      "conditions": [],
+      "sort": [
+        {{{{ "field": "transaction.timestamp", "order": "desc" }}}}
+      ]
+    }}}}
+  ]
+}}}}
+```
+**Note**: The word "recent" means sort by timestamp descending, but does NOT mean add a limit. Only add `limit` if the user says a specific number like "show me my last 10 transactions".
 
 ━━━━━━━━━━━━━━━━━━━━━━━
 📤 **Your Task**

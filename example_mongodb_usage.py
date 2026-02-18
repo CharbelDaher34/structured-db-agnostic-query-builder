@@ -12,8 +12,9 @@ from query_builder import QueryOrchestrator
 
 load_dotenv()
 
-DEFAULT_MONGO_URI = os.getenv("MONGO_URI", "mongodb://admin:vAF4jUA8Iq4amZaNPnQq87X9@84.16.230.94:27017/?authSource=admin")
-DEFAULT_DATABASE = os.getenv("MONGO_DATABASE", "visa_adcb")
+# Use environment or localhost fallback (do not commit real URIs)
+DEFAULT_MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+DEFAULT_DATABASE = os.getenv("MONGO_DATABASE", "visa_adcb_poc")
 DEFAULT_COLLECTION = os.getenv("MONGO_COLLECTION", "llm_transactions")
 DEFAULT_CATEGORY_FIELDS = [
     "transaction_location",
