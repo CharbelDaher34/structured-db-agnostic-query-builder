@@ -4,45 +4,50 @@ Query execution coordinator.
 Handles execution of queries through database-specific executors.
 """
 
-from typing import Any, Dict, List
+import asyncio
+import logging
+from typing import Any, Dict, List, Optional
 
 from query_builder.core.interfaces import IQueryExecutor
+
+logger = logging.getLogger(__name__)
 
 
 class QueryExecutor:
     """
     Coordinates query execution.
-    
+
     Wraps a database-specific query executor and provides common
-    execution logic like error handling and retries.
+    execution logic like error handling and async dispatch.
     """
-    
+
     def __init__(self, executor: IQueryExecutor):
         """
         Initialize query executor.
-        
+
         Args:
             executor: Database-specific query executor implementation
         """
         self.executor = executor
-    
-    def execute(self, queries: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """
-        Execute multiple queries.
-        
-        Args:
-            queries: List of database-specific query objects
-            
-        Returns:
-            List of result dictionaries
-        """
+
+    def execute(
+        self,
+        queries: List[Dict[str, Any]],
+        offset: int = 0,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Execute multiple queries synchronously."""
         if not queries:
             return []
-        
+
         try:
-            return self.executor.execute(queries)
+            # Adapters that accept pagination kwargs use them; older ones ignore them.
+            try:
+                return self.executor.execute(queries, offset=offset, limit=limit)
+            except TypeError:
+                return self.executor.execute(queries)
         except Exception as e:
-            # Return error result for all queries
+            logger.exception("Query execution failed")
             return [
                 {
                     "total_hits": 0,
@@ -52,21 +57,24 @@ class QueryExecutor:
                 }
                 for _ in queries
             ]
-    
+
+    async def execute_async(
+        self,
+        queries: List[Dict[str, Any]],
+        offset: int = 0,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Execute queries on a worker thread so blocking DB drivers don't stall the event loop.
+        """
+        return await asyncio.to_thread(self.execute, queries, offset, limit)
+
     def execute_raw(self, query: Dict[str, Any], size: int = 100) -> Dict[str, Any]:
-        """
-        Execute a raw database query.
-        
-        Args:
-            query: Raw database query object
-            size: Number of results to return
-            
-        Returns:
-            Result dictionary
-        """
+        """Execute a raw database query."""
         try:
             return self.executor.execute_raw(query, size)
         except Exception as e:
+            logger.exception("Raw query execution failed")
             return {
                 "total_hits": 0,
                 "documents": [],
@@ -75,3 +83,8 @@ class QueryExecutor:
                 "query": query,
             }
 
+    async def execute_raw_async(
+        self, query: Dict[str, Any], size: int = 100
+    ) -> Dict[str, Any]:
+        """Async variant of execute_raw."""
+        return await asyncio.to_thread(self.execute_raw, query, size)

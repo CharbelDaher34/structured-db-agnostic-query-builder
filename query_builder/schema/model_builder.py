@@ -122,19 +122,20 @@ class ModelBuilder:
         
         # Process direct fields
         for field_name, field_info in direct_fields.items():
-            if field_name in self.fields_to_ignore:
+            full_field_path = f"{current_path}.{field_name}" if current_path else field_name
+
+            # Match either the full dotted path or the leaf name against the ignore list
+            if full_field_path in self.fields_to_ignore or field_name in self.fields_to_ignore:
                 continue
-            
+
             # Skip fields starting with underscore (Pydantic doesn't allow them)
             if field_name.startswith("_"):
                 continue
-            
+
             field_type = field_info.get("type")
-            
+
             if field_type in self.IGNORED_FIELD_TYPES:
                 continue
-            
-            full_field_path = f"{current_path}.{field_name}" if current_path else field_name
             
             # Check if this field has nested properties
             if field_name in grouped_fields:

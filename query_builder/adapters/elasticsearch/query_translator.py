@@ -4,19 +4,29 @@ Elasticsearch query translator.
 Converts normalized filters to Elasticsearch DSL queries.
 """
 
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 
 class ESQueryTranslator:
     """
     Translates structured filters to Elasticsearch DSL.
-    
+
     Implements the IQueryTranslator interface for Elasticsearch.
     """
-    
-    def __init__(self):
-        """Initialize Elasticsearch query translator."""
-        pass
+
+    def __init__(self, include_bucket_documents: bool = False, bucket_documents_size: int = 10):
+        """
+        Initialize Elasticsearch query translator.
+
+        Args:
+            include_bucket_documents: If True, add a `top_hits` sub-aggregation that returns
+                source documents per bucket. Defaults to False — including top_hits unconditionally
+                inflates response size and slows pure metric aggregations.
+            bucket_documents_size: Size for the top_hits sub-aggregation when enabled.
+        """
+        self.include_bucket_documents = include_bucket_documents
+        self.bucket_documents_size = bucket_documents_size
     
     def translate(
         self, filters: Dict[str, Any], model_info: Dict[str, Any]
@@ -196,9 +206,11 @@ class ESQueryTranslator:
                 break
         
         sub_aggs = target_for_sub_aggs.setdefault("aggs", {})
-        
-        # Always add top_hits to get documents per bucket
-        sub_aggs["documents"] = {"top_hits": {"size": 100}}
+
+        # Only include per-bucket documents when explicitly requested. top_hits is expensive
+        # and unnecessary for pure metric aggregations.
+        if self.include_bucket_documents:
+            sub_aggs["documents"] = {"top_hits": {"size": self.bucket_documents_size}}
         
         # Process aggregation metrics
         having_clauses = []
@@ -268,6 +280,12 @@ class ESQueryTranslator:
         return f"{field}.keyword"
     
     @staticmethod
-    def _is_date_string(s: str) -> bool:
-        """Check if string looks like a date (YYYY-MM-DD format)."""
-        return len(s) == 10 and s[4] == "-" and s[7] == "-"
+    def _is_date_string(s: Any) -> bool:
+        """Check if string parses as an ISO date or datetime."""
+        if not isinstance(s, str):
+            return False
+        try:
+            datetime.fromisoformat(s.replace("Z", "+00:00"))
+            return True
+        except ValueError:
+            return False

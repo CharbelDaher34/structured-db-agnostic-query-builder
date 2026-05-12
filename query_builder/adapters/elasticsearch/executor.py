@@ -85,10 +85,12 @@ class ESQueryExecutor:
             Result dictionary
         """
         try:
-            if "size" not in query:
-                query["size"] = size
-            
-            response = self.es_client.search(index=self.index_name, **query)
+            # Don't mutate the caller's dict — they may reuse it.
+            request = {**query}
+            if "size" not in request:
+                request["size"] = size
+
+            response = self.es_client.search(index=self.index_name, **request)
             
             result = {
                 "total_hits": (
@@ -97,7 +99,7 @@ class ESQueryExecutor:
                     else response["hits"]["total"]
                 ),
                 "documents": [hit["_source"] for hit in response["hits"]["hits"]],
-                "query": query,
+                "query": request,
                 "success": True,
             }
             

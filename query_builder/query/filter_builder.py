@@ -276,11 +276,11 @@ class FilterModelBuilder:
             @model_validator(mode="after")
             def validate_slice(self) -> "QuerySlice":
                 """Validate and correct query slice parameters."""
-                # Remove null field conditions
-                for query in self.conditions:
-                    if query.field.value == "null":
-                        self.conditions.remove(query)
-                
+                # Remove null field conditions (build a new list — mutating during iteration skips elements)
+                self.conditions = [
+                    q for q in self.conditions if q.field.value != "null"
+                ]
+
                 # Remove aggregations/interval if no group_by
                 if not self.group_by:
                     if self.aggregations:

@@ -10,24 +10,59 @@ from typing import Any, Dict
 class PromptGenerator:
     """
     Generates system prompts for LLM filter extraction.
-    
+
     Creates comprehensive prompts that guide the LLM to convert natural
     language queries into structured filter objects.
     """
-    
-    def __init__(self, model_info: Dict[str, Any]):
+
+    # Above this many enum values, the system prompt only lists a sample plus a count
+    # to avoid blowing up the prompt size and the LLM context window.
+    MAX_ENUM_VALUES_INLINE = 50
+
+    def __init__(self, model_info: Dict[str, Any], max_enum_values_inline: int | None = None):
         """
         Initialize prompt generator.
-        
+
         Args:
             model_info: Flattened field information from ModelBuilder
+            max_enum_values_inline: Maximum enum values to embed inline before summarising.
+                When an enum field has more values than this, only the first N are shown,
+                followed by a total-count hint. Pass 0 to never truncate.
         """
         self.model_info = model_info
-    
+        self.max_enum_values_inline = (
+            max_enum_values_inline
+            if max_enum_values_inline is not None
+            else self.MAX_ENUM_VALUES_INLINE
+        )
+
+    def _summarise_model_info(self) -> Dict[str, Any]:
+        """Return a copy of model_info with large enum value lists trimmed for prompt embedding."""
+        if not self.max_enum_values_inline:
+            return self.model_info
+
+        summary: Dict[str, Any] = {}
+        for field, info in self.model_info.items():
+            if (
+                info.get("type") == "enum"
+                and isinstance(info.get("values"), list)
+                and len(info["values"]) > self.max_enum_values_inline
+            ):
+                trimmed = list(info["values"][: self.max_enum_values_inline])
+                summary[field] = {
+                    **info,
+                    "values": trimmed,
+                    "values_truncated": True,
+                    "total_values": len(info["values"]),
+                }
+            else:
+                summary[field] = info
+        return summary
+
     def generate_system_prompt(self) -> str:
         """
         Generate comprehensive system prompt for LLM.
-        
+
         Returns:
             System prompt string with instructions and examples
         """
@@ -39,8 +74,9 @@ You are an expert assistant that converts a user's natural-language question int
 
 ### 2. Available Data Schema
 This is the data you can query. Fields are specified as `object.field`.
+Note: any enum field marked `"values_truncated": true` lists only a sample of valid values; the total count is in `total_values`.
 
-{json.dumps(self.model_info, indent=2)}
+{json.dumps(self._summarise_model_info(), indent=2)}
 
 ### 3. How to Build the JSON Filter
 Your entire output must be a single JSON object with one key, `filters`. This key holds a list of "slices". Each slice represents a set of data.
@@ -234,4 +270,3 @@ Note: Since "New York" is not in the valid enum values, the location filter is o
 After reading the user question, output **only** the corresponding JSON object (starting with `{{ "filters": [...] }}`). No extra explanation.
 ━━━━━━━━━━━━━━━━━━━━━━━
 """
-
