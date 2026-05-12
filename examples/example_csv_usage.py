@@ -14,7 +14,7 @@ from query_builder import QueryOrchestrator
 
 load_dotenv()
 
-CSV_PATH = os.getenv("CSV_PATH", "examples.csv")
+CSV_PATH = os.getenv("CSV_PATH", os.path.join(os.path.dirname(__file__), "examples.csv"))
 
 # Columns exposed to the LLM as enums (it picks from a fixed sampled set
 # rather than emitting free-form strings).

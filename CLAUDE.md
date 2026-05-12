@@ -8,14 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 # Install dependencies
 uv sync
 
-# Run the API server
-uv run api.py
-# or: uvicorn api:app --host 0.0.0.0 --port 8000
-
 # Run example scripts
-uv run example_mongodb_usage.py
-uv run example_client_factory_usage.py
-uv run test_ollama.py
+uv run examples/example_mongodb_usage.py
+uv run examples/example_client_factory_usage.py
+uv run examples/example_csv_usage.py
+uv run examples/test_ollama.py
 ```
 
 ## Environment Variables
@@ -30,15 +27,9 @@ MONGO_DATABASE=your_database
 MONGO_COLLECTION=your_collection
 MONGO_SAMPLE_SIZE=1000
 
-# Comma-separated; override the in-code defaults for the API server
-DEFAULT_CATEGORY_FIELDS=transaction_location,transaction_currency,merchant_name
-DEFAULT_FIELDS_TO_IGNORE=converted_currency,merchant_category_description
-
 ES_HOST=http://localhost:9200
 ES_INDEX=your_index
 
-API_HOST=0.0.0.0
-API_PORT=8000
 LOG_LEVEL=INFO
 ```
 
@@ -94,11 +85,3 @@ QueryOrchestrator.from_csv(csv_path, category_fields=..., date_columns=..., ...)
 1. Create `query_builder/adapters/newdb/` with `schema_extractor.py`, `query_translator.py`, `executor.py` implementing the three `Protocol` interfaces in `core/interfaces.py`.
 2. Add a `from_newdb(...)` classmethod to `QueryOrchestrator`. If the adapter holds a connection/resource, pass the same handle to both the extractor and the executor so they share state.
 
-### REST API
-
-`api.py` exposes `POST /query`. It uses a FastAPI **lifespan** that:
-- Builds a default `QueryOrchestrator` at startup using env vars and calls `warm_up()`
-- Caches orchestrators keyed by `(uri, db, collection, category_fields, fields_to_ignore)`
-- Calls `orchestrator.close()` for all cached orchestrators on shutdown
-
-Query parameters: `execute` (run the query), `offset`, `limit` (pagination, only applied when the LLM-generated query has no `$limit`).

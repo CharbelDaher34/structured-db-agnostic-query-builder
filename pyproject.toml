@@ -1,20 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
-name = "elastic-query-builder"
+name = "structured-query-builder"
 version = "0.1.0"
-description = "Add your description here"
+description = "Natural-language → database query builder (MongoDB / Elasticsearch / CSV)"
 readme = "README.md"
 requires-python = ">=3.12"
+authors = [{ name = "Charbel Daher", email = "charbeldaher34@gmail.com" }]
+license = { text = "MIT" }
+
 dependencies = [
-    "elasticsearch==8.11.1",
-    "pydantic-ai>=0.4.0",
     "pydantic>=2.11.7",
-    "pillow>=11.3.0",
-    "pymupdf>=1.26.3",
-    "python-multipart>=0.0.20",
-    "fastapi>=0.116.0",
+    "pydantic-ai>=0.4.0",
     "pandas>=2.3.1",
-    "openpyxl>=3.1.5",
-    "streamlit>=1.46.1",
-    "graphviz>=0.21",
+]
+
+[project.optional-dependencies]
+mongodb = ["pymongo>=4.13.2"]
+elasticsearch = ["elasticsearch==8.11.1"]
+all = [
     "pymongo>=4.13.2",
+    "elasticsearch==8.11.1",
+]
+
+[project.urls]
+Repository = "https://github.com/CharbelDaher34/structured-db-agnostic-query-builder"
+
+[tool.hatch.build.targets.wheel]
+packages = ["query_builder"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "query_builder",
+    "README.md",
+    "pyproject.toml",
 ]
