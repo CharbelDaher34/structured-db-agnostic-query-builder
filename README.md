@@ -1,107 +1,106 @@
-# Database Query Builder
+# structured-query-builder
 
-A database-agnostic natural language query builder that converts plain English questions into structured database queries (MongoDB aggregation pipelines, Elasticsearch DSL, or pandas operations against a CSV) using LLM-powered structured output.
+Natural-language → database query builder. Plain English in, native query out — for MongoDB, Elasticsearch, or CSV files. Built on `pydantic-ai` for structured LLM output.
 
-## Overview
+```python
+from query_builder import QueryOrchestrator
 
-Type-safe Pydantic schemas pin down what the LLM is allowed to emit, and adapters translate that structured output to the native query language of each backend.
-
-**Key features**
-- **Natural language → database queries** — plain English in, native query out
-- **Three adapters out of the box** — MongoDB, Elasticsearch, CSV files
-- **Type-safe** — Pydantic validates schema, filters, and the LLM response
-- **LLM-powered** — uses any OpenAI-compatible API (OpenAI, Ollama, vLLM) via `pydantic-ai`
-- **Async, paginated REST API** — FastAPI with lifespan-managed orchestrator caching
-- **Automatic schema inference** — sample documents/rows to discover fields and enum values
-- **Aggregation support** — filtering, sorting, grouping, having clauses, time intervals
-
-## Architecture
-
-```
-query_builder/
-├── core/                          # Core models and interfaces
-│   ├── models.py                  # SchemaField, QueryResult, etc.
-│   └── interfaces.py              # ISchemaExtractor / IQueryTranslator / IQueryExecutor
-│
-├── schema/                        # Schema extraction and Pydantic model generation
-│   ├── extractor.py               # Caching wrapper around the adapter
-│   ├── model_builder.py           # Schema → Pydantic model
-│   └── type_mappings.py
-│
-├── query/                         # Filter building, prompt, translation
-│   ├── filter_builder.py          # Builds the discriminated-union filter model the LLM outputs into
-│   ├── prompt_generator.py        # System prompt; trims large enum value lists
-│   └── translator.py              # Wraps the adapter translator
-│
-├── llm/
-│   └── client_factory.py          # Reads LLM_MODEL / LLM_API_KEY / LLM_BASE_URL; wraps pydantic-ai Agent
-│
-├── execution/
-│   └── executor.py                # Sync + async (asyncio.to_thread) execution
-│
-├── adapters/
-│   ├── mongodb/                   # MongoSchemaExtractor / Translator / Executor
-│   ├── elasticsearch/             # ES adapter
-│   └── csv/                       # CSV adapter (pandas-backed)
-│
-└── orchestrator.py                # QueryOrchestrator — public entry point with from_mongodb/from_elasticsearch/from_csv
+orch = QueryOrchestrator.from_csv("transactions.csv", category_fields=["currency"])
+result = await orch.query("top 5 most expensive transactions in USD", execute=True)
+print(result["results"])
 ```
 
-### Request flow
+---
 
-```
-natural language query
-  → LLMClientFactory.parse_query()    pydantic-ai Agent → structured QueryFilters
-  → QueryTranslator.translate()        QueryFilters → adapter-specific query
-  → QueryExecutor.execute_async()      runs on a worker thread so blocking drivers don't stall the loop
-  → QueryResult                        normalised result dict
-```
+## Install
 
-## Installation
+The package ships with the CSV adapter included. MongoDB and Elasticsearch drivers are optional **extras** so you only install what you need.
 
-### Prerequisites
-- Python 3.12+
-- An OpenAI-compatible LLM endpoint (OpenAI, Ollama, vLLM, etc.)
-- MongoDB or Elasticsearch if you plan to use those adapters
-
-### Using uv (recommended)
+Install with [uv](https://docs.astral.sh/uv/) directly from GitHub (not yet on PyPI):
 
 ```bash
-git clone <repository-url>
-cd structured-db-agnostic-query-builder
-uv sync
-cp .env.example .env  # then edit
+# CSV adapter only
+uv add "structured-query-builder @ git+https://github.com/CharbelDaher34/structured-db-agnostic-query-builder"
+
+# + MongoDB driver
+uv add "structured-query-builder[mongodb] @ git+https://github.com/CharbelDaher34/structured-db-agnostic-query-builder"
+
+# + Elasticsearch driver
+uv add "structured-query-builder[elasticsearch] @ git+https://github.com/CharbelDaher34/structured-db-agnostic-query-builder"
+
+# All adapters
+uv add "structured-query-builder[all] @ git+https://github.com/CharbelDaher34/structured-db-agnostic-query-builder"
 ```
 
-### Environment variables
+### Pinning a version
+
+Append `@<tag-or-commit>` to lock to a specific revision:
+
+```bash
+uv add "structured-query-builder @ git+https://github.com/CharbelDaher34/structured-db-agnostic-query-builder@v0.1.0"
+```
+
+### Requirements
+
+- Python ≥ 3.12
+- An OpenAI-compatible LLM endpoint (OpenAI, Ollama, vLLM, Azure OpenAI, …)
+
+---
+
+## Configure the LLM
+
+The library reads credentials from environment variables, so you typically set them once via `.env` / `os.environ` and forget about them.
 
 ```env
-# LLM
 LLM_MODEL=gpt-4.1
-LLM_API_KEY=...                          # or OPENAI_API_KEY
-LLM_BASE_URL=http://localhost:11434/v1   # optional, for Ollama / vLLM / etc.
-
-# MongoDB (used by the API server)
-MONGO_URI=mongodb://user:password@host:port/?authSource=admin
-MONGO_DATABASE=your_database
-MONGO_COLLECTION=your_collection
-MONGO_SAMPLE_SIZE=1000
-
-# Comma-separated overrides for the API server's default orchestrator
-DEFAULT_CATEGORY_FIELDS=transaction_location,transaction_currency,merchant_name
-DEFAULT_FIELDS_TO_IGNORE=converted_currency,merchant_category_description
-
-# Elasticsearch
-ES_HOST=http://localhost:9200
-ES_INDEX=your_index
-
-# API
-API_HOST=0.0.0.0
-API_PORT=8000
-LOG_LEVEL=INFO
+LLM_API_KEY=sk-...
+# Optional — point at any OpenAI-compatible API (Ollama, vLLM, Azure, etc.)
+LLM_BASE_URL=http://localhost:11434/v1
 ```
 
-## Quick start
+`LLM_API_KEY` falls back to `OPENAI_API_KEY` if the former is unset.
+
+You can also pass these explicitly when you don't want to use env vars:
+
+```python
+from query_builder.llm.client_factory import LLMClientFactory
+
+LLMClientFactory(model_name="gpt-4.1", api_key="sk-...", base_url="https://api.openai.com/v1")
+```
+
+---
+
+## Usage
+
+The public entry point is `QueryOrchestrator`. Pick a factory that matches your data source, optionally warm it up, and call `query()`.
+
+### CSV files
+
+```python
+import asyncio
+from query_builder import QueryOrchestrator
+
+async def main():
+    orch = QueryOrchestrator.from_csv(
+        csv_path="transactions.csv",
+        category_fields=["category", "currency"],   # exposed as enums to the LLM
+        date_columns=["timestamp"],                 # parsed as datetimes
+        fields_to_ignore=["internal_notes"],
+        read_csv_kwargs={"sep": ",", "encoding": "utf-8"},
+    )
+    orch.warm_up()  # pre-build schema/filter model/prompt (optional)
+
+    result = await orch.query("How much did I spend on food each month?", execute=True)
+
+    print(result["extracted_filters"])     # structured filter the LLM produced
+    print(result["database_queries"])      # the pandas execution plan
+    print(result["results"])               # the actual rows
+    orch.close()
+
+asyncio.run(main())
+```
+
+The CSV is loaded once into a pandas DataFrame and reused for every query.
 
 ### MongoDB
 
@@ -110,7 +109,7 @@ import asyncio
 from query_builder import QueryOrchestrator
 
 async def main():
-    orchestrator = QueryOrchestrator.from_mongodb(
+    orch = QueryOrchestrator.from_mongodb(
         mongo_uri="mongodb://localhost:27017",
         database_name="mydb",
         collection_name="transactions",
@@ -118,24 +117,21 @@ async def main():
         fields_to_ignore=["internal_id"],
         sample_size=1000,
     )
-    orchestrator.warm_up()  # pre-build schema/filter model/prompt (optional)
 
-    result = await orchestrator.query(
+    result = await orch.query(
         "Show me the top 10 most expensive transactions in France",
         execute=True,
         offset=0,
-        limit=50,           # only injected if the LLM-generated query has no $limit
+        limit=50,   # only injected if the LLM-generated query has no $limit
     )
-
-    print(result["database_queries"])
+    print(result["database_queries"])   # MongoDB aggregation pipeline
     print(result["results"])
-
-    orchestrator.close()
+    orch.close()
 
 asyncio.run(main())
 ```
 
-`from_mongodb` shares a single `MongoClient` between the schema extractor and the executor. Schema is inferred from a **random** `$sample` (not the first N inserted documents), and `distinct()` is replaced with a bounded `$group + $limit` pipeline so high-cardinality category fields can't OOM the process. The post-`$group` sort automatically remaps `transaction.amount` → `sum_transaction_amount` (or to `_id.<field>` for group-by fields) so sorts after a grouped aggregation actually work.
+Requires `pip install "structured-query-builder[mongodb]"`. The orchestrator shares a single `MongoClient` between schema extraction and query execution.
 
 ### Elasticsearch
 
@@ -144,192 +140,122 @@ import asyncio
 from query_builder import QueryOrchestrator
 
 async def main():
-    orchestrator = QueryOrchestrator.from_elasticsearch(
+    orch = QueryOrchestrator.from_elasticsearch(
         es_host="http://localhost:9200",
         index_name="transactions",
         category_fields=["category", "status"],
-        fields_to_ignore=["_internal"],
-        include_bucket_documents=False,  # opt in to per-bucket top_hits if you need it
+        include_bucket_documents=False,   # opt in to per-bucket top_hits if needed
     )
-    result = await orchestrator.query(
+
+    result = await orch.query(
         "What's the average transaction amount by category?",
         execute=True,
     )
-    print(result)
+    print(result["database_queries"])   # ES query DSL
+    orch.close()
 
 asyncio.run(main())
 ```
 
-### CSV
+Requires `pip install "structured-query-builder[elasticsearch]"`.
+
+---
+
+## What you get back
+
+`orchestrator.query()` returns a dict:
 
 ```python
-import asyncio
-from query_builder import QueryOrchestrator
-
-async def main():
-    orchestrator = QueryOrchestrator.from_csv(
-        csv_path="transactions.csv",
-        category_fields=["category", "currency"],
-        date_columns=["timestamp"],            # parsed as datetimes
-        fields_to_ignore=["internal_notes"],
-        read_csv_kwargs={"sep": ",", "encoding": "utf-8"},
-    )
-    result = await orchestrator.query(
-        "How much did I spend on food each month?",
-        execute=True,
-    )
-    print(result["results"])
-
-asyncio.run(main())
+{
+    "natural_language_query": "...",
+    "extracted_filters": {                  # validated Pydantic output from the LLM
+        "filters": [
+            {
+                "conditions": [
+                    {"type": "EnumFilter", "field": "currency",
+                     "operator": "is", "value": "USD"}
+                ],
+                "sort": [{"field": "amount", "order": "desc"}],
+                "limit": 5
+            }
+        ]
+    },
+    "database_queries": [...],              # native query (MongoDB pipeline / ES DSL / pandas plan)
+    "results": [                            # only present when execute=True
+        {
+            "total_hits": 5,
+            "documents": [...],
+            "success": True,
+        }
+    ]
+}
 ```
 
-The CSV is loaded once into a pandas DataFrame and shared between the schema extractor and the executor. Filters become boolean masks; `group_by` + date `interval` is implemented with `pd.Grouper(freq=...)`; aggregations use `pd.NamedAgg`; sort remaps to grouped column names just like the Mongo translator does.
+If `execute=False`, you get the structured filter and the translated query without running it — useful for showing the user what would be executed, building a UI, or sending the query somewhere else.
 
-## REST API
+---
 
-### Start the server
+## Common options
+
+| `QueryOrchestrator.query()` parameter | Description |
+|---|---|
+| `natural_language_query` | The user's plain-English question |
+| `execute` (default `True`) | Whether to actually run the query against the data source |
+| `offset` (default `0`) | Pagination offset, applied to executed queries |
+| `limit` (default `None`) | Pagination limit, applied only when the generated query doesn't already have one |
+
+| Method | Purpose |
+|---|---|
+| `orch.warm_up()` | Pre-build the schema, filter model and system prompt so the first query isn't slow |
+| `orch.close()` | Release DB connections (no-op for CSV) |
+| `orch.print_model_summary()` | Pretty-print the inferred schema — useful for verifying your `category_fields` and `fields_to_ignore` are correct |
+| `orch.query_raw(query, size)` | Execute a raw native query, bypassing the LLM |
+
+---
+
+## How it works
+
+1. **Schema extraction** — the adapter samples the data source (random `$sample` for MongoDB, mapping for Elasticsearch, dtypes for CSV) to discover fields, types, and enum values.
+2. **Pydantic filter model** — a `QueryFilters` model is built dynamically from that schema. Field names, types, enum values, and per-type operators are all type-checked.
+3. **Structured LLM call** — `pydantic-ai` calls your configured model with the system prompt + user query and *validates* the output against `QueryFilters`. The LLM can't return a malformed query.
+4. **Translation** — the adapter converts the structured filter into a native query: MongoDB aggregation pipeline, Elasticsearch DSL, or a pandas execution plan.
+5. **Execution** — runs on a worker thread (`asyncio.to_thread`) so blocking DB drivers don't stall your event loop.
+
+Each filter slice supports `conditions` (AND-joined), `sort`, `limit`, `group_by`, `aggregations` (sum/avg/count/min/max with optional `having_operator`/`having_value`), and a date `interval` for time-bucketed grouping. Multiple slices express comparisons like "A vs B".
+
+---
+
+## Examples
+
+See [`examples/`](examples/) for full runnable scripts:
+
+- [`example_csv_usage.py`](examples/example_csv_usage.py) — three scenarios on a CSV (filter+sort+limit, group-by + having, date-interval aggregation)
+- [`example_mongodb_usage.py`](examples/example_mongodb_usage.py) — MongoDB equivalents
+- [`example_client_factory_usage.py`](examples/example_client_factory_usage.py) — using the LLM client factory directly
+
+Run any of them:
 
 ```bash
-uv run api.py
-# or
-uvicorn api:app --host 0.0.0.0 --port 8000
+LLM_MODEL=gpt-4.1 LLM_API_KEY=sk-... uv run examples/example_csv_usage.py
 ```
 
-The API uses a FastAPI **lifespan**: a default MongoDB orchestrator is built **once** at startup, warmed up, and cached. Requests with a matching configuration reuse it; requests with overrides spin up additional orchestrators that are cached by `(uri, db, collection, category_fields, fields_to_ignore)`. All cached orchestrators are closed on shutdown.
+---
 
-### `POST /query`
+## Optional REST API
 
-| Param | In | Type | Description |
-|---|---|---|---|
-| `query` | body | string | Natural-language query |
-| `category_fields` | body | list[str] | Override default category fields |
-| `fields_to_ignore` | body | list[str] | Override default ignored fields |
-| `mongo_uri` / `database_name` / `collection_name` | query | string | Override default MongoDB target |
-| `execute` | query | bool | Run the query and include `results` in the response |
-| `offset` | query | int ≥ 0 | Pagination offset (executed queries only) |
-| `limit` | query | int ≥ 1 | Pagination limit (only applied when the generated query has no `$limit`) |
+The repo also includes [`api.py`](api.py) — a small FastAPI server exposing `POST /query` with lifespan-managed orchestrator caching. It's bundled as a runnable example, not as a library import; if you want to expose the query builder over HTTP, copy it into your project and adapt the defaults.
 
-**Request:**
-
-```json
-{
-  "query": "Show me top 5 expensive transactions in USD",
-  "category_fields": ["merchant_name", "currency"]
-}
-```
-
-**Response:**
-
-```json
-{
-  "natural_language_query": "Show me top 5 expensive transactions in USD",
-  "extracted_filters": {
-    "filters": [
-      {
-        "conditions": [
-          { "type": "EnumFilter", "field": "currency", "operator": "is", "value": "USD" }
-        ],
-        "sort": [{ "field": "amount", "order": "desc" }],
-        "limit": 5
-      }
-    ]
-  },
-  "database_queries": [
-    {
-      "pipeline": [
-        { "$match": { "currency": { "$eq": "USD" } } },
-        { "$sort": { "amount": -1 } },
-        { "$limit": 5 }
-      ]
-    }
-  ],
-  "results": null
-}
-```
-
-## Filter model
-
-The LLM emits a `QueryFilters` object whose schema is built dynamically from the live data source. Each slice has:
-
-```python
-{
-  "conditions": [        # AND-joined typed filters
-    { "type": "StringFilter",  "field": "...", "operator": "...", "value": ... },
-    { "type": "NumberFilter",  "field": "...", "operator": "...", "value": ... },
-    { "type": "DateFilter",    "field": "...", "operator": "...", "value": ... },
-    { "type": "BooleanFilter", "field": "...", "operator": "...", "value": ... },
-    { "type": "EnumFilter",    "field": "...", "operator": "...", "value": ... }
-  ],
-  "sort":         [{"field": "...", "order": "asc|desc"}],
-  "limit":        10,
-  "group_by":     ["..."],
-  "aggregations": [
-    { "field": "...", "type": "sum|avg|count|min|max",
-      "having_operator": ">", "having_value": 1000 }
-  ],
-  "interval": "day|week|month|year"
-}
-```
-
-Multiple slices in the top-level `filters` list are how comparisons (`A vs B`) are represented.
-
-**Operators by type:**
-
-| Type | Operators |
-|---|---|
-| string | `is`, `different`, `contains`, `isin`, `notin`, `exists` |
-| number | `<`, `>`, `is`, `different`, `between`, `isin`, `notin`, `exists` |
-| date | `<`, `>`, `is`, `different`, `between`, `exists` |
-| boolean | `is`, `different`, `exists` |
-| enum | `is`, `different`, `isin`, `notin`, `exists` |
-
-Pydantic validators enforce that the chosen filter type matches the field's schema type and that enum values come from the sampled set.
-
-## Adding a new adapter
-
-Implement the three `Protocol` interfaces in [core/interfaces.py](query_builder/core/interfaces.py):
-
-```python
-class NewDBSchemaExtractor:    # → ISchemaExtractor
-    def extract_schema(self) -> Dict[str, Any]: ...
-    def get_distinct_values(self, field_path: str, size: int = 1000) -> List[Any]: ...
-    def get_field_type(self, field_path: str) -> str: ...
-
-class NewDBQueryTranslator:    # → IQueryTranslator
-    def translate(self, filters, model_info) -> List[Dict[str, Any]]: ...
-
-class NewDBQueryExecutor:      # → IQueryExecutor
-    def execute(self, queries, offset=0, limit=None) -> List[Dict[str, Any]]: ...
-    def execute_raw(self, query, size=100) -> Dict[str, Any]: ...
-```
-
-Then add a `from_newdb(...)` classmethod on `QueryOrchestrator` and (if the adapter holds a connection or DataFrame) pass the same handle to both the extractor and the executor so they share state.
-
-## Configuration notes
-
-- **`category_fields`** — only mark fields with reasonable cardinality (< 1000 distinct values). The schema extractor caps the distinct-value lookup, and the prompt generator further trims any enum > 50 values when embedding it in the system prompt (with a `values_truncated`/`total_values` hint).
-- **`fields_to_ignore`** — matched either as a full dotted path (e.g. `transaction.internal_id`) or as a leaf field name.
-- **`sample_size`** (MongoDB) — larger = more accurate schema inference but slower startup.
-- **`date_columns`** (CSV) — pass these to make the executor treat the column as datetime; without it, date filters and date-histogram grouping won't work.
-- **`include_grouped_documents`** (MongoDB) / **`include_bucket_documents`** (Elasticsearch) — opt in if you want the raw documents pushed into each aggregation bucket; off by default to avoid `$push: $$ROOT` blowing past MongoDB's 16 MB BSON limit and to keep ES responses small for pure metric queries.
+---
 
 ## Limitations
 
-- **Single index/collection/file per orchestrator.** No multi-source joins.
-- **AND-only within a slice.** Multi-slice comparisons cover the most common "A vs B" case; nested `(A OR B) AND C` is not yet supported.
-- **CSV is in-memory.** The CSV adapter loads the whole file into a pandas DataFrame.
-- **Schema changes require recreating the orchestrator** (or calling `invalidate_cache()` on the adapter's extractor).
+- One data source per orchestrator — no cross-source joins.
+- AND-only within a single filter slice. Multi-slice comparisons cover the most common "A vs B" case; nested `(A OR B) AND C` is not yet supported.
+- The CSV adapter loads the file into memory (pandas DataFrame).
+- Schema changes require recreating the orchestrator (or calling `invalidate_cache()` on the adapter's extractor).
 
-## Dependencies
+---
 
-Core: `pydantic`, `pydantic-ai` · DB drivers: `pymongo`, `elasticsearch==8.11.1` · CSV: `pandas` · API: `fastapi`, `uvicorn` · Utilities: `python-dotenv`, `openpyxl`
+## License
 
-## Roadmap
-
-- [x] MongoDB adapter
-- [x] Elasticsearch adapter
-- [x] CSV adapter
-- [x] Pagination + async execution
-- [ ] PostgreSQL adapter
-- [ ] Nested `OR`/`AND` within a single slice
-- [ ] Streaming results for large datasets
+MIT. See [pyproject.toml](pyproject.toml).
