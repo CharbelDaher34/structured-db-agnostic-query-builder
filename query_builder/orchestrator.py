@@ -227,8 +227,75 @@ class QueryOrchestrator:
         orch._shared_client = client
         return orch
 
+    @classmethod
+    def from_sqlmodel(
+        cls,
+        database_url: str,
+        table: Any,
+        category_fields: Optional[list[str]] = None,
+        fields_to_ignore: Optional[list[str]] = None,
+        engine_kwargs: Optional[dict[str, Any]] = None,
+    ) -> "QueryOrchestrator":
+        """
+        Create orchestrator backed by any SQLAlchemy/SQLModel-compatible database.
+
+        Works with PostgreSQL, MySQL, SQLite, etc. — anything SQLAlchemy supports.
+
+        Args:
+            database_url: SQLAlchemy connection URL, e.g.
+                ``postgresql+psycopg://user:pwd@host/db``, ``mysql+pymysql://…``,
+                ``sqlite:///path/to.db``.
+            table: SQLModel class, ``sqlalchemy.Table``, or table name string.
+                String names are reflected from the live database.
+            category_fields: Columns to expose as enums.
+            fields_to_ignore: Columns to exclude from the generated schema.
+            engine_kwargs: Extra kwargs forwarded to ``sqlalchemy.create_engine``
+                (e.g. ``{"pool_pre_ping": True, "echo": False}``).
+        """
+        from sqlalchemy import create_engine
+
+        from query_builder.adapters.sql import (
+            SQLQueryExecutor,
+            SQLQueryTranslator,
+            SQLSchemaExtractor,
+            resolve_table,
+        )
+
+        engine = create_engine(database_url, **(engine_kwargs or {}))
+        table_obj = resolve_table(engine, table)
+
+        schema_extractor = SQLSchemaExtractor(
+            engine=engine,
+            table=table_obj,
+            category_fields=category_fields,
+        )
+        query_translator = SQLQueryTranslator(table=table_obj, dialect_name=engine.dialect.name)
+        query_executor = SQLQueryExecutor(engine=engine, owns_engine=True)
+
+        orch = cls(
+            schema_extractor=schema_extractor,
+            query_translator=query_translator,
+            query_executor=query_executor,
+            category_fields=category_fields,
+            fields_to_ignore=fields_to_ignore,
+        )
+        # SQLAlchemy engines use .dispose(), not .close() — stash the executor
+        # itself so close() picks the right teardown path.
+        orch._sql_engine = engine
+        return orch
+
     def close(self) -> None:
         """Release database connections held by the orchestrator's adapters."""
+        # SQLAlchemy engine uses dispose(), so it can't go through the
+        # _shared_client (close()) path. Handle it explicitly first.
+        engine = getattr(self, "_sql_engine", None)
+        if engine is not None:
+            try:
+                engine.dispose()
+            except Exception:
+                logger.warning("Failed to dispose SQLAlchemy engine", exc_info=True)
+            return
+
         shared = getattr(self, "_shared_client", None)
         if shared is not None:
             try:

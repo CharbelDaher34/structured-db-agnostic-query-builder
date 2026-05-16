@@ -75,6 +75,34 @@ class TypeMapper:
         "array": list,
     }
 
+    # Python runtime type names → normalized type strings.
+    # Used by schema extractors that infer types from sampled Python values
+    # (e.g. MongoSchemaExtractor sampling documents with type(value).__name__).
+    PYTHON_TYPE_MAP: dict[str, str] = {
+        "str": "string",
+        "int": "number",
+        "float": "number",
+        "bool": "boolean",
+        "datetime": "date",
+        "date": "date",
+        "dict": "object",
+        "list": "array",
+        "ObjectId": "string",
+    }
+
+    @classmethod
+    def normalize_python_type(cls, type_name: str) -> str:
+        """
+        Normalize a Python runtime type name to a common type string.
+
+        Args:
+            type_name: Python type name (e.g. from ``type(value).__name__``)
+
+        Returns:
+            Normalized type string (string, number, date, boolean, object, array, unknown)
+        """
+        return cls.PYTHON_TYPE_MAP.get(type_name, "unknown")
+
     @classmethod
     def get_python_type(cls, db_type: str, source_db: str = "common") -> type:
         """

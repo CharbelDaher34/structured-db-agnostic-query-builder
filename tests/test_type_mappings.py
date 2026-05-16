@@ -44,6 +44,27 @@ class TestGetPythonType:
         assert TypeMapper.get_python_type("STRING") is str
 
 
+class TestNormalizePythonType:
+    def test_str(self):
+        assert TypeMapper.normalize_python_type("str") == "string"
+
+    def test_int_and_float(self):
+        assert TypeMapper.normalize_python_type("int") == "number"
+        assert TypeMapper.normalize_python_type("float") == "number"
+
+    def test_bool(self):
+        assert TypeMapper.normalize_python_type("bool") == "boolean"
+
+    def test_datetime(self):
+        assert TypeMapper.normalize_python_type("datetime") == "date"
+
+    def test_objectid_maps_to_string(self):
+        assert TypeMapper.normalize_python_type("ObjectId") == "string"
+
+    def test_unknown_returns_unknown(self):
+        assert TypeMapper.normalize_python_type("SomeCustomClass") == "unknown"
+
+
 class TestNormalizeType:
     def test_string(self):
         assert TypeMapper.normalize_type("text", "elasticsearch") == "string"

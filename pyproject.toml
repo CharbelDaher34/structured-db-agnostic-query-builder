@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "structured-query-builder"
 version = "0.1.0"
-description = "Natural-language → database query builder (MongoDB / Elasticsearch / CSV)"
+description = "Natural-language → database query builder (MongoDB / Elasticsearch / SQL / CSV)"
 readme = "README.md"
 requires-python = ">=3.12"
 authors = [{ name = "Charbel Daher", email = "charbeldaher34@gmail.com" }]
@@ -15,6 +15,7 @@ dependencies = [
     "pydantic>=2.13.4",
     "pydantic-ai>=1.97.0",
     "pandas>=2.3.1",
+    "sqlmodel>=0.0.38",
 ]
 
 [project.optional-dependencies]

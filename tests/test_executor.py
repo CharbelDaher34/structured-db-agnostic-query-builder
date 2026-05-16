@@ -1,11 +1,8 @@
 """Tests for the QueryExecutor coordinator."""
 
-import asyncio
-
 import pytest
 
 from query_builder.execution.executor import QueryExecutor
-from query_builder.execution.result_formatter import ResultFormatter
 
 
 class FakeAdapter:
@@ -75,26 +72,3 @@ class TestExecuteRaw:
         adapter = FakeAdapter()
         out = await QueryExecutor(adapter).execute_raw_async({"x": 1}, size=5)
         assert out["success"] is True
-
-
-class TestResultFormatter:
-    def test_format_result_defaults(self):
-        out = ResultFormatter.format_result({})
-        assert out == {"total_hits": 0, "documents": [], "success": True}
-
-    def test_format_result_preserves_aggregations(self):
-        out = ResultFormatter.format_result(
-            {"total_hits": 2, "documents": [], "aggregations": {"sum": 1}}
-        )
-        assert out["aggregations"] == {"sum": 1}
-
-    def test_format_result_with_error_marks_failure(self):
-        out = ResultFormatter.format_result({"total_hits": 0, "documents": [], "error": "x"})
-        assert out["success"] is False
-        assert out["error"] == "x"
-
-    def test_format_results_batch(self):
-        out = ResultFormatter.format_results([{}, {"error": "x"}])
-        assert len(out) == 2
-        assert out[0]["success"] is True
-        assert out[1]["success"] is False

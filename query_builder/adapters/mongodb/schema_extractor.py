@@ -12,6 +12,8 @@ from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 
+from query_builder.schema.type_mappings import TypeMapper
+
 logger = logging.getLogger(__name__)
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?Z?)?$")
@@ -178,19 +180,10 @@ class MongoSchemaExtractor:
         if "dict" in types or "object" in types:
             return "object"
 
-        type_map = {
-            "str": "string",
-            "int": "number",
-            "float": "number",
-            "bool": "boolean",
-            "datetime": "date",
-            "date": "date",
-            "ObjectId": "string",
-        }
-
         for t in types:
-            if t in type_map:
-                return type_map[t]
+            normalized = TypeMapper.normalize_python_type(t)
+            if normalized != "unknown":
+                return normalized
 
         return "string"
 
