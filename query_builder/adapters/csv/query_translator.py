@@ -9,10 +9,11 @@ the "translation" here is mostly normalization: each filter slice becomes a
 self-contained execution plan with the keys the executor consumes.
 """
 
-import logging
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from query_builder._logging import QueryBuilderLogger
+
+logger = QueryBuilderLogger.get(__name__)
 
 
 class CSVQueryTranslator:

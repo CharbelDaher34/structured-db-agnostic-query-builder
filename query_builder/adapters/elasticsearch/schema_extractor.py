@@ -4,14 +4,14 @@ Elasticsearch schema extraction.
 Implements ISchemaExtractor for Elasticsearch.
 """
 
-import logging
 from typing import Any, Optional
 
 from elasticsearch import Elasticsearch
 
+from query_builder._logging import QueryBuilderLogger
 from query_builder.schema.type_mappings import TypeMapper
 
-logger = logging.getLogger(__name__)
+logger = QueryBuilderLogger.get(__name__)
 
 
 class ESSchemaExtractor:

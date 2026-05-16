@@ -5,14 +5,15 @@ Executes a normalized execution plan (produced by CSVQueryTranslator) against a
 pandas DataFrame and returns normalized results.
 """
 
-import logging
 import math
 from datetime import date, datetime
 from typing import Any, Optional
 
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+from query_builder._logging import QueryBuilderLogger
+
+logger = QueryBuilderLogger.get(__name__)
 
 
 def _looks_like_iso_date(value: Any) -> bool:

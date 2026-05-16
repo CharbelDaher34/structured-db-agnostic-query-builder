@@ -7,7 +7,6 @@ statement in ``SELECT COUNT(*) FROM (<stmt>) sub`` — matching the semantics of
 the other adapters.
 """
 
-import logging
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Optional
@@ -15,7 +14,9 @@ from typing import Any, Optional
 from sqlalchemy import Engine, Select, func, select, text
 from sqlalchemy.exc import SQLAlchemyError
 
-logger = logging.getLogger(__name__)
+from query_builder._logging import QueryBuilderLogger
+
+logger = QueryBuilderLogger.get(__name__)
 
 
 class SQLQueryExecutor:

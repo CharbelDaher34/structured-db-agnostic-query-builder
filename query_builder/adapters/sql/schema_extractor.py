@@ -8,15 +8,15 @@ Works with anything SQLModel/SQLAlchemy can describe: a SQLModel class, a
 SQLAlchemy ``Table`` instance, or a table name resolved against the engine.
 """
 
-import logging
 from typing import Any, Optional
 
 from sqlalchemy import Engine, MetaData, Table, select
 from sqlalchemy.exc import SQLAlchemyError
 
+from query_builder._logging import QueryBuilderLogger
 from query_builder.schema.type_mappings import TypeMapper
 
-logger = logging.getLogger(__name__)
+logger = QueryBuilderLogger.get(__name__)
 
 
 class SQLSchemaExtractor:

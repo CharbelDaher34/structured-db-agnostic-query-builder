@@ -4,11 +4,12 @@ Query orchestrator - main entry point.
 Coordinates all components to provide a unified query interface.
 """
 
-import logging
+import time
 from typing import Any, Optional
 
 from pydantic import BaseModel
 
+from query_builder._logging import QueryBuilderLogger
 from query_builder.core.interfaces import (
     IQueryExecutor,
     IQueryTranslator,
@@ -22,7 +23,7 @@ from query_builder.query.translator import QueryTranslator
 from query_builder.schema.extractor import SchemaExtractor
 from query_builder.schema.model_builder import ModelBuilder
 
-logger = logging.getLogger(__name__)
+logger = QueryBuilderLogger.get(__name__)
 
 
 class QueryOrchestrator:
@@ -72,6 +73,16 @@ class QueryOrchestrator:
         self._model_builder: Optional[ModelBuilder] = None
         self._filter_builder: Optional[FilterModelBuilder] = None
         self._prompt_generator: Optional[PromptGenerator] = None
+
+        logger.info(
+            "orchestrator initialised: extractor=%s translator=%s executor=%s "
+            "llm_provider=%s llm_model=%s",
+            type(schema_extractor).__name__,
+            type(query_translator).__name__,
+            type(query_executor).__name__,
+            self.llm_factory.provider,
+            self.llm_factory.model_name,
+        )
 
     @classmethod
     def from_elasticsearch(
@@ -290,6 +301,7 @@ class QueryOrchestrator:
         # _shared_client (close()) path. Handle it explicitly first.
         engine = getattr(self, "_sql_engine", None)
         if engine is not None:
+            logger.info("close: disposing SQLAlchemy engine")
             try:
                 engine.dispose()
             except Exception:
@@ -298,6 +310,7 @@ class QueryOrchestrator:
 
         shared = getattr(self, "_shared_client", None)
         if shared is not None:
+            logger.info("close: releasing shared client %s", type(shared).__name__)
             try:
                 shared.close()
             except Exception:
@@ -346,9 +359,16 @@ class QueryOrchestrator:
 
         Useful at startup so the first request isn't penalised by lazy initialisation.
         """
+        logger.info("warm_up: building schema model, filter model, and system prompt")
+        t0 = time.perf_counter()
         self._get_model_builder()
         self._get_filter_builder().build_filter_model()
         self._get_prompt_generator().generate_system_prompt()
+        logger.info(
+            "warm_up: done (%d fields, took %.0f ms)",
+            len(self.get_model_info()),
+            (time.perf_counter() - t0) * 1000,
+        )
 
     def generate_model(self, model_name: str = "GeneratedModel") -> type[BaseModel]:
         """Generate Pydantic model from schema."""
@@ -403,6 +423,15 @@ class QueryOrchestrator:
                 "LLM not configured. Provide llm_model and llm_api_key in the constructor."
             )
 
+        t0 = time.perf_counter()
+        logger.info(
+            "query.start: %r (execute=%s, offset=%d, limit=%s)",
+            natural_language_query,
+            execute,
+            offset,
+            limit,
+        )
+
         filter_builder = self._get_filter_builder()
         prompt_generator = self._get_prompt_generator()
 
@@ -410,18 +439,35 @@ class QueryOrchestrator:
         system_prompt = prompt_generator.generate_system_prompt()
 
         # Parse query with LLM (async)
+        logger.info(
+            "query.llm_call: provider=%s model=%s",
+            self.llm_factory.provider,
+            self.llm_factory.model_name,
+        )
+        t_llm = time.perf_counter()
         filters = await self.llm_factory.parse_query(
             inputs=natural_language_query,
             filter_model=filter_model,
             system_prompt=system_prompt,
         )
+        llm_ms = (time.perf_counter() - t_llm) * 1000
 
         filters = filters.model_dump(mode="json")
-        logger.debug("extracted_filters=%s", filters)
+        num_slices = len(filters.get("filters", []))
+        logger.info("query.llm_done: %d slice(s) in %.0f ms", num_slices, llm_ms)
+        logger.debug("query.extracted_filters=%s", filters)
 
         # Translate to database queries
+        t_tr = time.perf_counter()
         model_info = self.get_model_info()
         db_queries = self.query_translator.translate(filters, model_info)
+        tr_ms = (time.perf_counter() - t_tr) * 1000
+        logger.info(
+            "query.translated: %d native query/queries via %s in %.0f ms",
+            len(db_queries),
+            type(self._query_translator_impl).__name__,
+            tr_ms,
+        )
 
         response: dict[str, Any] = {
             "natural_language_query": natural_language_query,
@@ -431,12 +477,51 @@ class QueryOrchestrator:
 
         # Execute if requested, off the event loop so we don't block other requests
         if execute and db_queries:
+            logger.info(
+                "query.execute: %d query/queries via %s",
+                len(db_queries),
+                type(self._query_executor_impl).__name__,
+            )
+            t_ex = time.perf_counter()
             results = await self.query_executor.execute_async(
                 db_queries, offset=offset, limit=limit
             )
+            ex_ms = (time.perf_counter() - t_ex) * 1000
+            total_hits = sum(r.get("total_hits", 0) for r in results)
+            failures = sum(1 for r in results if not r.get("success", True))
+            logger.info(
+                "query.execute_done: total_hits=%d failures=%d in %.0f ms",
+                total_hits,
+                failures,
+                ex_ms,
+            )
             response["results"] = results
 
+        logger.info(
+            "query.done: total %.0f ms (execute=%s)",
+            (time.perf_counter() - t0) * 1000,
+            execute,
+        )
         return response
+
+    async def build_query(self, natural_language_query: str) -> dict[str, Any]:
+        """
+        Build the native query for a natural-language request without executing it.
+
+        Equivalent to ``await orch.query(nl, execute=False)`` but more discoverable
+        when the caller's intent is "show me what would run, don't touch the DB" —
+        e.g. surfacing the generated query in a UI, dry-running before approval,
+        caching, or handing the query off to a different runner.
+
+        Returns the same dict as :meth:`query`, minus the ``results`` key:
+
+            {
+                "natural_language_query": "...",
+                "extracted_filters": { ... },     # validated QueryFilters
+                "database_queries":  [ ... ],     # native query objects
+            }
+        """
+        return await self.query(natural_language_query, execute=False)
 
     def query_raw(self, query: dict[str, Any], size: int = 100) -> dict[str, Any]:
         """Execute a raw database query."""

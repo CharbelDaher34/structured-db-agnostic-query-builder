@@ -4,11 +4,12 @@ MongoDB query translator.
 Converts normalized filters to MongoDB aggregation pipeline.
 """
 
-import logging
 from datetime import datetime
 from typing import Any, Optional
 
-logger = logging.getLogger(__name__)
+from query_builder._logging import QueryBuilderLogger
+
+logger = QueryBuilderLogger.get(__name__)
 
 
 def _looks_like_iso_date(value: Any) -> bool:

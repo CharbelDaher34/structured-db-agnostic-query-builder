@@ -32,9 +32,17 @@ uv run pre-commit run --all-files    # manual run across the repo
 ## Environment Variables
 
 ```env
-LLM_MODEL=gpt-4.1
-LLM_API_KEY=...          # or OPENAI_API_KEY
-LLM_BASE_URL=...         # optional, for OpenAI-compatible APIs (e.g., Ollama at http://localhost:11434/v1)
+# Pick one provider: openai (default) | anthropic | google | openai-compatible
+LLM_PROVIDER=openai
+LLM_MODEL=gpt-4.1                    # gpt-4o / claude-sonnet-4-5 / gemini-1.5-pro / qwen3:8b / ...
+
+# Provider-specific key — set only the one for your LLM_PROVIDER
+OPENAI_API_KEY=sk-...
+ANTHROPIC_API_KEY=...
+GOOGLE_API_KEY=...                   # or GEMINI_API_KEY
+
+# Required only when LLM_PROVIDER=openai-compatible (Ollama, vLLM, …)
+LLM_BASE_URL=http://localhost:11434
 
 MONGO_URI=mongodb://user:password@host:port/?authSource=admin
 MONGO_DATABASE=your_database
@@ -55,6 +63,8 @@ LOG_LEVEL=INFO
 
 This is a **natural language → database query** system. The user provides a plain English query; the system extracts a schema from the live data source, builds a Pydantic model from that schema, sends it to an LLM for structured output, then translates the structured output into a native database query.
 
+Supported backends: MongoDB, Elasticsearch, SQL (PostgreSQL / MySQL / SQLite via **SQLAlchemy + SQLModel**), and CSV.
+
 ### Request flow
 
 ```
@@ -74,7 +84,8 @@ natural language query
 | `query_builder/core/` | Shared models (`SchemaField`, `QueryResult`) and `Protocol` interfaces (`ISchemaExtractor`, `IQueryTranslator`, `IQueryExecutor`) |
 | `query_builder/schema/` | `SchemaExtractor` (unified wrapper), `ModelBuilder` (schema → Pydantic model), `type_mappings.py` |
 | `query_builder/query/` | `FilterModelBuilder` (builds the discriminated-union Pydantic model the LLM outputs into), `PromptGenerator` (trims large enum lists with a `values_truncated` hint), `QueryTranslator` (thin wrapper over adapter translator) |
-| `query_builder/llm/` | `LLMClientFactory` — reads `LLM_MODEL`, `LLM_API_KEY`, `LLM_BASE_URL` from env; wraps `pydantic-ai` `Agent` |
+| `query_builder/llm/` | `LLMClientFactory` — reads `LLM_PROVIDER` (`openai` / `anthropic` / `google` / `openai-compatible`), `LLM_MODEL`, the matching provider key (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY`), and `LLM_BASE_URL` (for the openai-compatible path); builds the corresponding `OpenAIChatModel` / `AnthropicModel` / `GoogleModel` and wraps it in a pydantic-ai `Agent` |
+| `query_builder/_logging.py` | `QueryBuilderLogger` — single entry point for logging across the package. Every module does `logger = QueryBuilderLogger.get(__name__)` instead of `logging.getLogger(__name__)`. Host apps call `QueryBuilderLogger.configure(level="DEBUG")` once at startup (or set `LOG_LEVEL` env var) to control verbosity. `orchestrator.query()` emits INFO-level lifecycle events with millisecond timings: `orchestrator initialised`, `query.start` → `query.llm_call` → `query.llm_done` → `query.translated` → `query.execute` → `query.execute_done` → `query.done`; `schema.extract`, `warm_up`, and `close` similarly logged. Extracted filter payloads are logged at DEBUG |
 | `query_builder/execution/` | `QueryExecutor` with both sync `execute()` and async `execute_async()` (uses `asyncio.to_thread`); pagination kwargs `offset`/`limit` are forwarded to adapters. The `IQueryExecutor` protocol declares `offset` / `limit` directly so adapter signatures match — no `try`/`except TypeError` fallback |
 | `query_builder/adapters/mongodb/` | `MongoSchemaExtractor` (uses `$sample` for random sampling, bounded `$group + $limit` for distinct values), `MongoQueryTranslator` (remaps post-`$group` sort to `_id.<field>` or aggregation result names; uses `$convert` for date grouping so BSON `Date` and ISO-string columns both work; `include_grouped_documents=False` by default to avoid the 16 MB BSON limit), `MongoQueryExecutor` (accepts a shared `MongoClient`, injects `$skip`/`$limit` for pagination, runs a piggy-back `$count` pipeline so `total_hits` is the **pre-pagination** matched row count) |
 | `query_builder/adapters/elasticsearch/` | `ESSchemaExtractor` (records `es_type` + `has_keyword_subfield` so the translator knows when to add `.keyword`; accepts a shared `Elasticsearch` client), `ESQueryTranslator` (`_exact_match_field` honours `es_type`: `text` → suffix `.keyword`, `keyword` → raw field; `include_bucket_documents=False` by default — `top_hits` sub-aggregation is opt-in), `ESQueryExecutor` (doesn't mutate caller's query dict, injects `from`/`size`, uses `_msearch` for multi-slice queries to save round-trips) |
@@ -117,7 +128,7 @@ The suite has **282 tests** in ~25s, broken into:
 - **AI integration tests** ([tests/test_ai_integration.py](tests/test_ai_integration.py), 5 tests): hit a real LLM through the full pipeline against a small CSV.
 - **Hard AI evaluation** ([tests/test_ai_eval_complex.py](tests/test_ai_eval_complex.py), 16 tests): real LLM against a 200-row synthetic orders dataset ([tests/fixtures/build_complex_dataset.py](tests/fixtures/build_complex_dataset.py)) with 18 columns covering enums of varying cardinality, two date columns, numerics, booleans, and free text. Covers simple filters, multi-condition AND, date ranges, invalid-enum dropping, top-N/sort, "recent" without limit, group+sum, two-field group, having clauses, date histograms, multi-agg, and two-slice comparisons.
 
-LLM-marked tests require `LLM_API_KEY` (or `OPENAI_API_KEY`); CI skips them via `-m 'not llm'`.
+LLM-marked tests require a provider API key (`OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY`); CI skips them via `-m 'not llm'`.
 
 ### Tooling & CI
 

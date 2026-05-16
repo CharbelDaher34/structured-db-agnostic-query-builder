@@ -4,7 +4,6 @@ MongoDB schema extraction.
 Implements ISchemaExtractor for MongoDB by sampling documents.
 """
 
-import logging
 import re
 from typing import Any, Optional
 
@@ -12,9 +11,10 @@ from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 
+from query_builder._logging import QueryBuilderLogger
 from query_builder.schema.type_mappings import TypeMapper
 
-logger = logging.getLogger(__name__)
+logger = QueryBuilderLogger.get(__name__)
 
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d+)?Z?)?$")
 

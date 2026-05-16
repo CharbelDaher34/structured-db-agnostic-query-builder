@@ -11,13 +11,14 @@ gets ``strftime``, MySQL gets ``date_format``. Any other dialect falls back to
 ``cast(col, Date)`` which only supports day-level granularity.
 """
 
-import logging
 from typing import Any, Optional
 
 from sqlalchemy import Date, Select, Table, and_, asc, cast, desc, func, select
 from sqlalchemy.sql.elements import ColumnElement
 
-logger = logging.getLogger(__name__)
+from query_builder._logging import QueryBuilderLogger
+
+logger = QueryBuilderLogger.get(__name__)
 
 
 class SQLQueryTranslator:

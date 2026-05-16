@@ -4,12 +4,13 @@ Elasticsearch query executor.
 Executes Elasticsearch DSL queries and returns normalized results.
 """
 
-import logging
 from typing import Any, Optional
 
 from elasticsearch import Elasticsearch
 
-logger = logging.getLogger(__name__)
+from query_builder._logging import QueryBuilderLogger
+
+logger = QueryBuilderLogger.get(__name__)
 
 
 class ESQueryExecutor:

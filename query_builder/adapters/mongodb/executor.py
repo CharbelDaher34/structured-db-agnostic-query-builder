@@ -4,14 +4,15 @@ MongoDB query executor.
 Executes MongoDB aggregation pipelines and returns normalized results.
 """
 
-import logging
 from typing import Any, Optional
 
 from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.database import Database
 
-logger = logging.getLogger(__name__)
+from query_builder._logging import QueryBuilderLogger
+
+logger = QueryBuilderLogger.get(__name__)
 
 
 class MongoQueryExecutor:

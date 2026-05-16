@@ -499,7 +499,7 @@ class TestExecutor:
 class TestOrchestratorFactory:
     def test_from_sqlmodel_with_class(self, tmp_path, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
         # File-based SQLite so the factory's engine and our setup share state.
         # In-memory ``sqlite://`` opens a new isolated DB per connection.
@@ -534,7 +534,7 @@ class TestOrchestratorFactory:
 
     def test_from_sqlmodel_close_disposes_engine(self, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
 
         orch = QueryOrchestrator.from_sqlmodel(
             database_url="sqlite://",

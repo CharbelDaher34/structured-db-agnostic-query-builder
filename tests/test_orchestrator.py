@@ -67,7 +67,7 @@ class FakeExecutor:
 @pytest.fixture
 def fake_orchestrator(monkeypatch):
     monkeypatch.setenv("LLM_MODEL", "gpt-4o")
-    monkeypatch.setenv("LLM_API_KEY", "sk-test")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     return QueryOrchestrator(
         schema_extractor=FakeSchemaExtractor(),
         query_translator=FakeTranslator(),
@@ -131,6 +131,22 @@ class TestQuery:
         with pytest.raises(ValueError, match="LLM not configured"):
             await fake_orchestrator.query("x")
 
+    @pytest.mark.asyncio
+    async def test_build_query_returns_queries_without_executing(self, fake_orchestrator):
+        # Stub the LLM so we don't hit a real API
+        fake_filters = MagicMock()
+        fake_filters.model_dump = MagicMock(return_value={"filters": [{"conditions": []}]})
+        fake_orchestrator.llm_factory.parse_query = AsyncMock(return_value=fake_filters)
+
+        out = await fake_orchestrator.build_query("show me rows")
+
+        assert out["natural_language_query"] == "show me rows"
+        assert "extracted_filters" in out
+        assert "database_queries" in out
+        assert "results" not in out
+        # Executor never called when building only
+        assert fake_orchestrator._query_executor_impl.exec_calls == []
+
 
 class TestClose:
     def test_close_closes_adapters_individually(self, fake_orchestrator):
@@ -162,7 +178,7 @@ class TestRawQuery:
 class TestFactories:
     def test_from_csv(self, sample_csv, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         orch = QueryOrchestrator.from_csv(
             csv_path=str(sample_csv),
             category_fields=["status"],
@@ -175,7 +191,7 @@ class TestFactories:
 
     def test_from_mongodb_shares_client(self, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         with patch("pymongo.MongoClient") as MongoClientMock:
             client = MongoClientMock.return_value
             orch = QueryOrchestrator.from_mongodb("uri", "db", "coll", category_fields=["status"])
@@ -189,7 +205,7 @@ class TestFactories:
 
     def test_from_elasticsearch(self, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "gpt-4o")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
         with (
             patch("query_builder.adapters.elasticsearch.schema_extractor.Elasticsearch"),
             patch("query_builder.adapters.elasticsearch.executor.Elasticsearch"),

@@ -4,13 +4,14 @@ CSV schema extraction.
 Implements ISchemaExtractor for CSV files using pandas.
 """
 
-import logging
 from datetime import datetime
 from typing import Any, Optional
 
 import pandas as pd
 
-logger = logging.getLogger(__name__)
+from query_builder._logging import QueryBuilderLogger
+
+logger = QueryBuilderLogger.get(__name__)
 
 
 def _looks_like_iso_date(value: Any) -> bool:

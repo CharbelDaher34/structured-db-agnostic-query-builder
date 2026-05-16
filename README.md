@@ -1,6 +1,6 @@
 # structured-query-builder
 
-Natural-language → database query builder. Plain English in, native query out — for MongoDB, Elasticsearch, or CSV files. Built on `pydantic-ai` for structured LLM output.
+Natural-language → database query builder. Plain English in, native query out — for MongoDB, Elasticsearch, SQL databases (PostgreSQL / MySQL / SQLite via SQLAlchemy + SQLModel), or CSV files. Built on `pydantic-ai` for structured LLM output.
 
 ```python
 from query_builder import QueryOrchestrator
@@ -12,14 +12,93 @@ print(result["results"])
 
 ---
 
+## How it works
+
+This library never lets the model emit a raw database query. It builds a *typed shape of valid queries against your actual schema*, asks the model to fill in that shape, then translates the validated result into a native query. Direct text-to-SQL hands the model a blank cheque — it can invent columns, write `DROP TABLE`, or emit dialect-specific SQL your database doesn't speak. This approach hands it a form instead.
+
+The four stages are deterministic and inspectable:
+
+### 1. Sample the live data source → uniform field map
+
+Each backend adapter reads your data source once and produces the same dict shape:
+
+```python
+{
+    "amount":     {"type": "number"},
+    "currency":   {"type": "enum", "values": ["USD", "EUR", "GBP"]},
+    "created_at": {"type": "date"},
+    "is_paid":    {"type": "boolean"},
+}
+```
+
+How each adapter gets there:
+
+- **SQL** — reads `Table` columns via SQLAlchemy and maps each `column.type.python_type` to a normalized type (`str` → `string`, `int`/`float` → `number`, `datetime` → `date`, …).
+- **MongoDB** — random-samples N documents with `$sample` and infers each field's type from the actual values seen (so a schemaless collection still produces a usable schema).
+- **Elasticsearch** — reads the index mapping; remembers `text` vs `keyword` so the translator knows whether to suffix `.keyword` for exact-match aggregations.
+- **CSV** — inspects pandas dtypes; sniffs ISO-date strings in object columns to recover dates from string-typed CSVs.
+
+For any field marked as a `category_field`, the adapter also runs a bounded distinct-values query (`SELECT DISTINCT col LIMIT N`, `$group + $limit`, ES `terms` agg, or `df[col].unique()[:N]`) and stores the result under `"values"`. The model is later only allowed to pick from this set for that field.
+
+### 2. Field map → Pydantic model of valid queries
+
+This is the core of the library — [`FilterModelBuilder`](query_builder/query/filter_builder.py) dynamically constructs a class hierarchy that *describes every legal query against your schema*. The class is built once per schema and cached.
+
+The building blocks:
+
+- A `FieldEnum` containing one member per field name in the schema. Anywhere a filter, sort, group-by, or aggregation names a field, it must come from this enum — referencing a column that doesn't exist fails validation, not execution.
+- One filter class per data type, each pinned to its own operator enum:
+
+  | Filter | Allowed operators |
+  |---|---|
+  | `StringFilter` | `is`, `different`, `contains`, `isin`, `notin`, `exists` |
+  | `NumberFilter` | `<`, `>`, `is`, `different`, `between`, `isin`, `notin`, `exists` |
+  | `DateFilter` | `<`, `>`, `is`, `different`, `between`, `exists` |
+  | `BooleanFilter` | `is`, `different`, `exists` |
+  | `EnumFilter` | `is`, `different`, `isin`, `notin`, `exists` (+ values must come from the schema's `values` list) |
+
+- A discriminated `Union[StringFilter | NumberFilter | DateFilter | BooleanFilter | EnumFilter]` keyed on a `type` literal, so every condition is exactly one filter type — and a `model_validator` on each filter class rejects the wrong type on the wrong field (e.g. `StringFilter` pointed at a date column raises immediately).
+- A `QuerySlice` wrapping `conditions: list[FilterType]` plus optional `sort`, `limit`, `group_by`, `aggregations`, and a date `interval` (`day`/`week`/`month`/`year`). A slice-level validator drops conditions where the LLM emitted a null-field placeholder and clears `aggregations`/`interval` whenever there's no `group_by`.
+- A top-level `QueryFilters` containing `filters: list[QuerySlice]` — multiple slices express "A vs B" comparisons in a single round-trip.
+
+The resulting class would reject, for example: a `StringFilter` on a `date` column; a `NumberFilter` with `operator="contains"`; an `EnumFilter` with `value="DEM"` when the sampled data only contained `["USD", "EUR", "GBP"]`; a sort on a field name that isn't in the table. All of these are caught at parse time, before any query is constructed.
+
+### 3. Fill in the model
+
+The system prompt is built from the same field map: [`PromptGenerator`](query_builder/query/prompt_generator.py) picks representative enum / numeric / date fields from *your* schema and writes worked examples using *your* actual field names, so the model sees `region`, `amount`, `order_date` instead of a hard-coded financial example that doesn't match your data.
+
+The model is invoked with the system prompt + the user's natural-language query and constrained to return a `QueryFilters` instance via structured output. Whatever it returns is validated against the model above; if anything fails (unknown field, wrong filter type for a field, invalid enum value, …), parsing rejects it before translation runs.
+
+### 4. Structured filter → native query
+
+The validated `QueryFilters` is then translated by the backend-specific translator:
+
+- **SQL** ([`SQLQueryTranslator`](query_builder/adapters/sql/query_translator.py)) — emits SQLAlchemy `Select` statements. Operators map to SQLAlchemy expressions: `>` → `col > value`, `between` → `col.between(a, b)`, `isin` → `col.in_(...)`, `contains` → `col.ilike("%v%")`. Aggregations become `func.sum`/`avg`/`count`/`min`/`max` with labeled aliases; `having_operator`/`having_value` become a `HAVING` clause. `group_by` with a date `interval` becomes dialect-aware date truncation (`date_trunc` on PostgreSQL, `strftime` on SQLite, `date_format` on MySQL, generic `cast(col, Date)` fallback). Sort on an aggregated field is rewritten to the alias so it references the result column, not the raw input.
+- **MongoDB** — emits an aggregation pipeline: `$match` for filters, `$group` for aggregations (using `$convert` for date binning so BSON `Date` and ISO-string columns both work), `$sort`, `$skip`/`$limit` for pagination.
+- **Elasticsearch** — emits the query DSL: `bool` queries for conditions, `terms` / `date_histogram` / `sum`/`avg`/… aggs for grouping, `from`/`size` for pagination. Multi-slice queries go through `_msearch` to save round-trips.
+- **CSV** — emits a pandas execution plan: boolean masks for filters, `pd.Grouper(freq=...)` for date intervals, `pd.NamedAgg` for aggregations, post-mask `having` filtering.
+
+The executor runs the native query and returns a uniform `{total_hits, documents, aggregations?, success}` shape across all backends. `total_hits` is always the *pre-pagination* row count, so the same UI code can render result counts regardless of which adapter served the request.
+
+### What this design gives you
+
+- **Schema-grounded.** Field names, types, and enum values come from your live data — the model can't invent a column or use an enum value that doesn't exist.
+- **Read-only by construction.** The output type only describes filters, sort, group-by, and aggregation. There is no syntactic path to `DROP`, `DELETE`, or `UPDATE`.
+- **Backend-agnostic.** The same natural-language query produces the same `QueryFilters` regardless of backend — only step 4 changes. Switching MongoDB → PostgreSQL doesn't touch the prompt.
+- **Auditable.** `result["extracted_filters"]` exposes the structured intent *before* translation, so you can log it, cache it, hand-edit it, or diff two runs deterministically.
+
+---
+
 ## Install
 
-The package ships with the CSV adapter included. MongoDB and Elasticsearch drivers are optional **extras** so you only install what you need.
+The package ships with the CSV and SQL (SQLAlchemy / SQLModel) adapters included. MongoDB and Elasticsearch drivers are optional **extras** — you only pay for the driver wheels you actually use.
+
+For specific SQL dialects you'll also need the matching DB-API driver (`psycopg` for PostgreSQL, `pymysql` for MySQL, etc.) — SQLite works out of the box.
 
 Install with [uv](https://docs.astral.sh/uv/) directly from GitHub (not yet on PyPI):
 
 ```bash
-# CSV adapter only
+# CSV + SQL adapters
 uv add "structured-query-builder @ git+https://github.com/CharbelDaher34/structured-db-agnostic-query-builder"
 
 # + MongoDB driver
@@ -32,14 +111,6 @@ uv add "structured-query-builder[elasticsearch] @ git+https://github.com/Charbel
 uv add "structured-query-builder[all] @ git+https://github.com/CharbelDaher34/structured-db-agnostic-query-builder"
 ```
 
-### Pinning a version
-
-Append `@<tag-or-commit>` to lock to a specific revision:
-
-```bash
-uv add "structured-query-builder @ git+https://github.com/CharbelDaher34/structured-db-agnostic-query-builder@v0.1.0"
-```
-
 ### Requirements
 
 - Python ≥ 3.12
@@ -49,23 +120,54 @@ uv add "structured-query-builder @ git+https://github.com/CharbelDaher34/structu
 
 ## Configure the LLM
 
-The library reads credentials from environment variables, so you typically set them once via `.env` / `os.environ` and forget about them.
+Pick a provider via `LLM_PROVIDER` and set the matching API key. The library reads everything from environment variables, so you typically set them once via `.env` / `os.environ` and forget about them.
+
+| `LLM_PROVIDER` | Backing pydantic-ai model | Required env vars |
+|---|---|---|
+| `openai` (default) | `OpenAIChatModel` | `LLM_MODEL`, `OPENAI_API_KEY` |
+| `anthropic` | `AnthropicModel` | `LLM_MODEL`, `ANTHROPIC_API_KEY` |
+| `google` | `GoogleModel` | `LLM_MODEL`, `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) |
+| `openai-compatible` | `OpenAIChatModel` | `LLM_MODEL`, `LLM_BASE_URL` (e.g. Ollama, vLLM); `OPENAI_API_KEY` optional |
 
 ```env
+# OpenAI
+LLM_PROVIDER=openai
 LLM_MODEL=gpt-4.1
-LLM_API_KEY=sk-...
-# Optional — point at any OpenAI-compatible API (Ollama, vLLM, Azure, etc.)
-LLM_BASE_URL=http://localhost:11434/v1
-```
+OPENAI_API_KEY=sk-...
 
-`LLM_API_KEY` falls back to `OPENAI_API_KEY` if the former is unset.
+# — or — Anthropic
+LLM_PROVIDER=anthropic
+LLM_MODEL=claude-sonnet-4-5
+ANTHROPIC_API_KEY=sk-ant-...
+
+# — or — Google Gemini
+LLM_PROVIDER=google
+LLM_MODEL=gemini-1.5-pro
+GOOGLE_API_KEY=...
+
+# — or — any OpenAI-compatible endpoint (Ollama, vLLM, Azure, …)
+LLM_PROVIDER=openai-compatible
+LLM_MODEL=qwen3:8b
+LLM_BASE_URL=http://localhost:11434       # /v1 suffix is added automatically
+```
 
 You can also pass these explicitly when you don't want to use env vars:
 
 ```python
 from query_builder.llm.client_factory import LLMClientFactory
 
-LLMClientFactory(model_name="gpt-4.1", api_key="sk-...", base_url="https://api.openai.com/v1")
+# OpenAI
+LLMClientFactory(provider="openai", model_name="gpt-4.1", api_key="sk-...")
+
+# Anthropic
+LLMClientFactory(provider="anthropic", model_name="claude-sonnet-4-5", api_key="sk-ant-...")
+
+# Local Ollama
+LLMClientFactory(
+    provider="openai-compatible",
+    model_name="qwen3:8b",
+    base_url="http://localhost:11434",
+)
 ```
 
 ---
@@ -159,6 +261,51 @@ asyncio.run(main())
 
 Requires `pip install "structured-query-builder[elasticsearch]"`.
 
+### SQL (PostgreSQL / MySQL / SQLite via SQLAlchemy + SQLModel)
+
+```python
+import asyncio
+from datetime import datetime
+from sqlmodel import Field, SQLModel
+from query_builder import QueryOrchestrator
+
+
+class Transaction(SQLModel, table=True):
+    id: int = Field(primary_key=True)
+    amount: float
+    currency: str
+    category: str
+    created_at: datetime
+
+
+async def main():
+    orch = QueryOrchestrator.from_sqlmodel(
+        database_url="postgresql+psycopg://user:pwd@host/mydb",
+        table=Transaction,                       # SQLModel class, Table, or table name
+        category_fields=["currency", "category"],
+    )
+
+    result = await orch.query(
+        "What's the average transaction amount by category in the last 30 days?",
+        execute=True,
+    )
+    print(result["database_queries"])   # SQLAlchemy Select statements
+    print(result["results"])
+    orch.close()                        # disposes the SQLAlchemy engine
+
+asyncio.run(main())
+```
+
+Works against anything SQLAlchemy supports — the `database_url` decides the dialect:
+
+| Dialect | URL format | Extra driver |
+|---|---|---|
+| PostgreSQL | `postgresql+psycopg://user:pwd@host/db` | `pip install psycopg` |
+| MySQL | `mysql+pymysql://user:pwd@host/db` | `pip install pymysql` |
+| SQLite | `sqlite:///path/to.db` | built-in |
+
+The `table` argument accepts a SQLModel/SQLAlchemy class, a `sqlalchemy.Table` instance, or a table-name string (reflected from the live database). One SQLAlchemy engine is shared between schema extraction and query execution, then disposed by `orch.close()`. Date-bucket grouping is dialect-aware (`date_trunc` on PostgreSQL, `strftime` on SQLite, `date_format` on MySQL).
+
 ---
 
 ## What you get back
@@ -180,7 +327,7 @@ Requires `pip install "structured-query-builder[elasticsearch]"`.
             }
         ]
     },
-    "database_queries": [...],              # native query (MongoDB pipeline / ES DSL / pandas plan)
+    "database_queries": [...],              # native query (MongoDB pipeline / ES DSL / SQLAlchemy Select / pandas plan)
     "results": [                            # only present when execute=True
         {
             "total_hits": 5,
@@ -208,20 +355,38 @@ If `execute=False`, you get the structured filter and the translated query witho
 |---|---|
 | `orch.warm_up()` | Pre-build the schema, filter model and system prompt so the first query isn't slow |
 | `orch.close()` | Release DB connections (no-op for CSV) |
+| `orch.build_query(nl_query)` | Translate without executing — returns `extracted_filters` + `database_queries` only. Same as `query(nl, execute=False)` but more discoverable when the intent is "show me what would run" |
 | `orch.print_model_summary()` | Pretty-print the inferred schema — useful for verifying your `category_fields` and `fields_to_ignore` are correct |
 | `orch.query_raw(query, size)` | Execute a raw native query, bypassing the LLM |
 
 ---
 
-## How it works
+## Logging
 
-1. **Schema extraction** — the adapter samples the data source (random `$sample` for MongoDB, mapping for Elasticsearch, dtypes for CSV) to discover fields, types, and enum values.
-2. **Pydantic filter model** — a `QueryFilters` model is built dynamically from that schema. Field names, types, enum values, and per-type operators are all type-checked.
-3. **Structured LLM call** — `pydantic-ai` calls your configured model with the system prompt + user query and *validates* the output against `QueryFilters`. The LLM can't return a malformed query.
-4. **Translation** — the adapter converts the structured filter into a native query: MongoDB aggregation pipeline, Elasticsearch DSL, or a pandas execution plan.
-5. **Execution** — runs on a worker thread (`asyncio.to_thread`) so blocking DB drivers don't stall your event loop.
+The package uses a single logger entry point — every module logs through `QueryBuilderLogger` so you can adjust verbosity from one place:
 
-Each filter slice supports `conditions` (AND-joined), `sort`, `limit`, `group_by`, `aggregations` (sum/avg/count/min/max with optional `having_operator`/`having_value`), and a date `interval` for time-bucketed grouping. Multiple slices express comparisons like "A vs B".
+```python
+from query_builder import QueryBuilderLogger
+
+QueryBuilderLogger.configure(level="DEBUG")   # DEBUG | INFO | WARNING | ERROR
+```
+
+If you don't call `configure()`, the package self-configures on first use from the `LOG_LEVEL` env var (default `INFO`). The default handler writes to stderr and the package logger doesn't propagate to the root logger, so it won't double-log when your host app has its own handler.
+
+At `INFO`, each query emits a lifecycle trace with millisecond timings:
+
+```
+[INFO] query_builder.orchestrator :: orchestrator initialised: extractor=SQLSchemaExtractor translator=SQLQueryTranslator executor=SQLQueryExecutor llm_provider=openai llm_model=gpt-4.1
+[INFO] query_builder.orchestrator :: query.start: 'top 5 most expensive transactions in USD' (execute=True, offset=0, limit=None)
+[INFO] query_builder.orchestrator :: query.llm_call: provider=openai model=gpt-4.1
+[INFO] query_builder.orchestrator :: query.llm_done: 1 slice(s) in 920 ms
+[INFO] query_builder.orchestrator :: query.translated: 1 native query/queries via SQLQueryTranslator in 1 ms
+[INFO] query_builder.orchestrator :: query.execute: 1 query/queries via SQLQueryExecutor
+[INFO] query_builder.orchestrator :: query.execute_done: total_hits=5 failures=0 in 12 ms
+[INFO] query_builder.orchestrator :: query.done: total 936 ms (execute=True)
+```
+
+Bump to `DEBUG` to also see the extracted-filter payload and per-field distinct-values resolution.
 
 ---
 
@@ -236,7 +401,7 @@ See [`examples/`](examples/) for full runnable scripts:
 Run any of them:
 
 ```bash
-LLM_MODEL=gpt-4.1 LLM_API_KEY=sk-... uv run examples/example_csv_usage.py
+LLM_PROVIDER=openai LLM_MODEL=gpt-4.1 OPENAI_API_KEY=sk-... uv run examples/example_csv_usage.py
 ```
 
 ---

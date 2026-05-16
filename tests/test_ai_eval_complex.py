@@ -35,11 +35,20 @@ from .fixtures.build_complex_dataset import (
 
 load_dotenv()
 
+
+def _any_provider_key_present() -> bool:
+    """Whether at least one provider's API key is set in the environment."""
+    return any(
+        os.getenv(var)
+        for var in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GOOGLE_API_KEY", "GEMINI_API_KEY")
+    )
+
+
 pytestmark = [
     pytest.mark.llm,
     pytest.mark.skipif(
-        not (os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")),
-        reason="Requires LLM_API_KEY for real LLM calls",
+        not _any_provider_key_present(),
+        reason="Requires a provider API key (OPENAI_API_KEY / ANTHROPIC_API_KEY / GOOGLE_API_KEY) for real LLM calls",
     ),
 ]
 

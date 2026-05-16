@@ -3,6 +3,22 @@ LLM client factory and management.
 
 Handles creation and lifecycle of LLM clients for query parsing.
 Supports text, images, audio, video, and document inputs.
+
+Provider selection
+------------------
+
+The factory builds a pydantic-ai ``Model`` from one of four supported providers:
+
+==================== ======================== =============================
+``LLM_PROVIDER``     pydantic-ai model class  Required env var
+==================== ======================== =============================
+``openai``           ``OpenAIChatModel``      ``OPENAI_API_KEY``
+``anthropic``        ``AnthropicModel``       ``ANTHROPIC_API_KEY``
+``google``           ``GoogleModel``          ``GOOGLE_API_KEY`` (or ``GEMINI_API_KEY``)
+``openai-compatible`` ``OpenAIChatModel``     ``LLM_BASE_URL`` (e.g. Ollama, vLLM); ``OPENAI_API_KEY`` optional
+==================== ======================== =============================
+
+``LLM_PROVIDER`` defaults to ``openai`` when unset.
 """
 
 import os
@@ -10,28 +26,38 @@ from typing import Any, Optional, Union
 
 from pydantic import BaseModel
 from pydantic_ai import Agent, AudioUrl, BinaryContent, DocumentUrl, ImageUrl, VideoUrl
-from pydantic_ai.models.openai import OpenAIModel
-from pydantic_ai.providers.openai import OpenAIProvider
 
 # Type alias for supported input types
 InputType = Union[str, ImageUrl, AudioUrl, VideoUrl, DocumentUrl, BinaryContent]
+
+# Supported providers — kept as a module-level constant so callers can introspect
+# the allowed values (e.g. for a CLI ``--provider`` choices list).
+SUPPORTED_PROVIDERS = ("openai", "anthropic", "google", "openai-compatible")
 
 
 class LLMClientFactory:
     """
     Creates and manages LLM clients for query processing.
 
-    Handles client initialization, reuse, and query parsing with
-    structured output. Supports OpenAI and OpenAI-compatible APIs.
+    Builds a pydantic-ai ``Model`` instance for one of the supported providers
+    (OpenAI, Anthropic, Google Gemini, or any OpenAI-compatible endpoint such
+    as Ollama or vLLM) and exposes a single :meth:`parse_query` entry point
+    that returns structured Pydantic output.
 
-    Reads configuration from environment variables by default:
-    - LLM_MODEL: Model name
-    - LLM_API_KEY or OPENAI_API_KEY: API key
-    - LLM_BASE_URL: Optional base URL for OpenAI-compatible APIs
+    Configuration is read from the environment by default:
+
+    - ``LLM_PROVIDER``: one of ``openai``, ``anthropic``, ``google``,
+      ``openai-compatible`` (default: ``openai``)
+    - ``LLM_MODEL``: model name (e.g. ``gpt-4o``, ``claude-sonnet-4-5``,
+      ``gemini-1.5-pro``, ``qwen3:8b``)
+    - ``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY`` / ``GOOGLE_API_KEY``:
+      provider-specific key (only the one matching ``LLM_PROVIDER`` is needed)
+    - ``LLM_BASE_URL``: required for ``openai-compatible``
     """
 
     def __init__(
         self,
+        provider: Optional[str] = None,
         model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
@@ -41,99 +67,127 @@ class LLMClientFactory:
         Initialize LLM client factory.
 
         Args:
-            model_name: Name of the LLM model (e.g., "gpt-4o", "qwen3:8b").
-                       If not provided, reads from LLM_MODEL environment variable.
-            api_key: API key for the LLM provider.
-                    If not provided, reads from LLM_API_KEY or OPENAI_API_KEY.
-                    Optional when using base_url (e.g., Ollama doesn't require real API keys).
-            base_url: Optional base URL for OpenAI-compatible APIs (e.g., "http://localhost:11434/v1" for Ollama).
-                     If not provided, reads from LLM_BASE_URL environment variable.
-            model_settings: Optional model settings (temperature, top_p, etc.)
+            provider: One of ``openai``, ``anthropic``, ``google``,
+                ``openai-compatible``. Falls back to ``LLM_PROVIDER`` env var,
+                then defaults to ``openai``.
+            model_name: Model name. Falls back to ``LLM_MODEL`` env var.
+            api_key: Provider API key. Falls back to the provider's standard
+                env var (``OPENAI_API_KEY`` / ``ANTHROPIC_API_KEY`` /
+                ``GOOGLE_API_KEY``). Optional for ``openai-compatible``.
+            base_url: Required for ``openai-compatible``. Falls back to
+                ``LLM_BASE_URL`` env var.
+            model_settings: Pydantic-AI model settings (temperature, top_p, …).
+                Defaults to ``{"temperature": 0, "top_p": 1.0}`` for stable
+                structured output.
 
         Raises:
-            ValueError: If model_name is missing, or if api_key is missing when not using base_url
+            ValueError: If required arguments for the chosen provider are
+                missing, or if the provider name is not recognised.
         """
-        # Read from environment variables if not provided
+        provider = (provider or os.getenv("LLM_PROVIDER") or "openai").lower()
         model_name = model_name or os.getenv("LLM_MODEL")
-        api_key = api_key or os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-        base_url = base_url or os.getenv("LLM_BASE_URL")
 
         if not model_name:
             raise ValueError(
                 "model_name is required (provide as parameter or set LLM_MODEL env var)"
             )
+        if provider not in SUPPORTED_PROVIDERS:
+            raise ValueError(
+                f"Unknown provider {provider!r}. Choose from: {', '.join(SUPPORTED_PROVIDERS)}"
+            )
 
-        self.api_key = api_key
+        self.provider = provider
+        self.model_name = model_name
+        self.base_url: Optional[str] = None
         self.model_settings = model_settings or {"temperature": 0, "top_p": 1.0}
 
-        # Configure model based on base_url
-        if base_url:
-            # Use OpenAI-compatible API with custom base URL (e.g., Ollama, vLLM)
-            # Normalize base_url - ensure it ends with /v1 for OpenAI-compatible APIs
-            normalized_base_url = base_url.rstrip("/")
-            if not normalized_base_url.endswith("/v1"):
-                normalized_base_url = f"{normalized_base_url}/v1"
+        self.model = self._build_model(provider, model_name, api_key, base_url)
 
-            self.base_url = normalized_base_url
+    # ------------------------------------------------------------------ model
 
-            # For Ollama, api_key can be None or a dummy value
-            provider_kwargs = {"base_url": normalized_base_url}
-            if api_key:
-                provider_kwargs["api_key"] = api_key
+    def _build_model(
+        self,
+        provider: str,
+        model_name: str,
+        api_key: Optional[str],
+        base_url: Optional[str],
+    ) -> Any:
+        """Construct the pydantic-ai Model for the chosen provider."""
+        if provider == "openai":
+            from pydantic_ai.models.openai import OpenAIChatModel
+            from pydantic_ai.providers.openai import OpenAIProvider
 
-            self.model = OpenAIModel(
-                model_name=model_name,
-                provider=OpenAIProvider(**provider_kwargs),
-            )
-        elif not api_key:
+            key = api_key or os.getenv("OPENAI_API_KEY")
+            if not key:
+                raise ValueError(
+                    "OPENAI_API_KEY is required for provider 'openai' "
+                    "(provide as api_key parameter or set the env var)"
+                )
+            return OpenAIChatModel(model_name=model_name, provider=OpenAIProvider(api_key=key))
+
+        if provider == "anthropic":
+            from pydantic_ai.models.anthropic import AnthropicModel
+            from pydantic_ai.providers.anthropic import AnthropicProvider
+
+            key = api_key or os.getenv("ANTHROPIC_API_KEY")
+            if not key:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY is required for provider 'anthropic' "
+                    "(provide as api_key parameter or set the env var)"
+                )
+            return AnthropicModel(model_name=model_name, provider=AnthropicProvider(api_key=key))
+
+        if provider == "google":
+            from pydantic_ai.models.google import GoogleModel
+            from pydantic_ai.providers.google import GoogleProvider
+
+            key = api_key or os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+            if not key:
+                raise ValueError(
+                    "GOOGLE_API_KEY (or GEMINI_API_KEY) is required for provider 'google'"
+                )
+            return GoogleModel(model_name=model_name, provider=GoogleProvider(api_key=key))
+
+        # provider == "openai-compatible" — Ollama, vLLM, Azure OpenAI, etc.
+        from pydantic_ai.models.openai import OpenAIChatModel
+        from pydantic_ai.providers.openai import OpenAIProvider
+
+        base = base_url or os.getenv("LLM_BASE_URL")
+        if not base:
             raise ValueError(
-                "api_key is required when not using a custom base_url (provide as parameter or set LLM_API_KEY/OPENAI_API_KEY env var)"
+                "LLM_BASE_URL is required for provider 'openai-compatible' "
+                "(e.g. http://localhost:11434 for Ollama)"
             )
-        else:
-            self.base_url = None
-            # Use standard OpenAI model or other providers
-            # Set API key in environment for Pydantic AI to use
-            if model_name.startswith(("openai:", "gpt")):
-                os.environ["OPENAI_API_KEY"] = api_key
-                self.model = model_name
-            elif model_name.startswith(("anthropic:", "claude")):
-                os.environ["ANTHROPIC_API_KEY"] = api_key
-                self.model = model_name
-            elif model_name.startswith(("gemini:", "google:")):
-                os.environ["GEMINI_API_KEY"] = api_key
-                self.model = model_name
-            else:
-                # Default to OpenAI
-                os.environ["OPENAI_API_KEY"] = api_key
-                self.model = f"openai:{model_name}"
+        # Normalise to /v1 — most OpenAI-compatible servers expect this suffix.
+        base = base.rstrip("/")
+        if not base.endswith("/v1"):
+            base = f"{base}/v1"
+        self.base_url = base
+
+        # api_key may legitimately be absent for local servers (Ollama accepts
+        # any value); only forward it when one is available.
+        kwargs: dict[str, Any] = {"base_url": base}
+        key = api_key or os.getenv("OPENAI_API_KEY")
+        if key:
+            kwargs["api_key"] = key
+        return OpenAIChatModel(model_name=model_name, provider=OpenAIProvider(**kwargs))
+
+    # ------------------------------------------------------------------ agent
 
     def _create_agent(
         self,
         output_type: Optional[type[BaseModel]],
         system_prompt: str,
     ) -> Agent[None, Optional[BaseModel]]:
-        """
-        Create a Pydantic AI agent.
-
-        Args:
-            output_type: Optional Pydantic model for structured output.
-                        If None, agent returns raw string response.
-            system_prompt: System prompt for the LLM
-
-        Returns:
-            Configured Pydantic AI Agent
-        """
-        agent_kwargs = {
+        """Create a Pydantic AI agent."""
+        agent_kwargs: dict[str, Any] = {
             "model": self.model,
             "system_prompt": system_prompt,
             "model_settings": self.model_settings,
-            "retries": 3,  # Increase retries for validation errors
+            "retries": 3,  # Recover from validation errors on the LLM's first attempt
         }
-
-        # Only add output_type if provided
         if output_type is not None:
             agent_kwargs["output_type"] = output_type
-
         return Agent(**agent_kwargs)
 
     async def parse_query(
@@ -149,46 +203,20 @@ class LLMClientFactory:
             result = await factory.parse_query(
                 inputs="Find high priority items",
                 filter_model=FilterModel,
-                system_prompt="Parse the query"
+                system_prompt="Parse the query",
             )
-            # Returns: {"status": "active", "priority": 5, ...}
-
-            # Unstructured output without filter_model
-            result = await factory.parse_query(
-                inputs="Summarize this text",
-                system_prompt="Provide a brief summary"
-            )
-            # Returns: {"response": "The summary text..."}
 
             # Image analysis with text
             result = await factory.parse_query(
                 inputs=[
                     "What's in this image?",
-                    ImageUrl(url="https://example.com/image.png")
+                    ImageUrl(url="https://example.com/image.png"),
                 ],
                 filter_model=ImageAnalysisModel,
-                system_prompt="Analyze and extract data"
-            )
-
-            # Local file with BinaryContent
-            from pathlib import Path
-            result = await factory.parse_query(
-                inputs=[
-                    "Extract data from this document",
-                    BinaryContent(
-                        data=Path("doc.pdf").read_bytes(),
-                        media_type="application/pdf"
-                    )
-                ],
-                filter_model=DocumentDataModel,
-                system_prompt="Extract structured data"
+                system_prompt="Analyze and extract data",
             )
         """
         agent = self._create_agent(filter_model, system_prompt)
-
-        # Convert single input to list
         input_data = [inputs] if not isinstance(inputs, list) else inputs
-
         result = await agent.run(input_data)
-
         return result.output

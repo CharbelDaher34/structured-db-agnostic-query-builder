@@ -5,12 +5,12 @@ Handles execution of queries through database-specific executors.
 """
 
 import asyncio
-import logging
 from typing import Any, Optional
 
+from query_builder._logging import QueryBuilderLogger
 from query_builder.core.interfaces import IQueryExecutor
 
-logger = logging.getLogger(__name__)
+logger = QueryBuilderLogger.get(__name__)
 
 
 class QueryExecutor:
