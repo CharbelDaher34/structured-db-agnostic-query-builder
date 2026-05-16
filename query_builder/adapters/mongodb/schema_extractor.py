@@ -6,7 +6,7 @@ Implements ISchemaExtractor for MongoDB by sampling documents.
 
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pymongo import MongoClient
 from pymongo.collection import Collection
@@ -30,7 +30,7 @@ class MongoSchemaExtractor:
         mongo_uri: str,
         database_name: str,
         collection_name: str,
-        category_fields: Optional[List[str]] = None,
+        category_fields: Optional[list[str]] = None,
         sample_size: int = 1000,
         client: Optional[MongoClient] = None,
     ):
@@ -58,8 +58,8 @@ class MongoSchemaExtractor:
         self.db: Database = self.client[database_name]
         self.collection: Collection = self.db[collection_name]
 
-        self._schema_cache: Optional[Dict[str, Any]] = None
-        self._enum_cache: Optional[Dict[str, List[Any]]] = None
+        self._schema_cache: Optional[dict[str, Any]] = None
+        self._enum_cache: Optional[dict[str, list[Any]]] = None
 
     def close(self) -> None:
         """Close the MongoDB client if owned by this extractor."""
@@ -69,7 +69,7 @@ class MongoSchemaExtractor:
             except Exception:
                 logger.warning("Failed to close MongoClient", exc_info=True)
 
-    def extract_schema(self) -> Dict[str, Any]:
+    def extract_schema(self) -> dict[str, Any]:
         """
         Extract normalized schema from MongoDB by randomly sampling documents.
 
@@ -87,9 +87,7 @@ class MongoSchemaExtractor:
                 )
             )
         except Exception:
-            logger.warning(
-                "Random sampling failed, falling back to sequential read", exc_info=True
-            )
+            logger.warning("Random sampling failed, falling back to sequential read", exc_info=True)
             sample_docs = list(self.collection.find().limit(self.sample_size))
 
         if not sample_docs:
@@ -105,19 +103,17 @@ class MongoSchemaExtractor:
         self._schema_cache = None
         self._enum_cache = None
 
-    def _infer_schema(
-        self, documents: List[Dict[str, Any]], prefix: str = ""
-    ) -> Dict[str, Any]:
+    def _infer_schema(self, documents: list[dict[str, Any]], prefix: str = "") -> dict[str, Any]:
         """Infer schema from a list of documents."""
-        schema: Dict[str, Any] = {}
-        field_types: Dict[str, set] = {}
+        schema: dict[str, Any] = {}
+        field_types: dict[str, set] = {}
 
         for doc in documents:
             self._collect_field_types(doc, field_types, prefix)
 
         for field_path, types in field_types.items():
             normalized_type = self._normalize_field_types(types)
-            field_info: Dict[str, Any] = {"type": normalized_type}
+            field_info: dict[str, Any] = {"type": normalized_type}
 
             if field_path in self.category_fields:
                 field_info["type"] = "enum"
@@ -129,7 +125,7 @@ class MongoSchemaExtractor:
     def _collect_field_types(
         self,
         obj: Any,
-        field_types: Dict[str, set],
+        field_types: dict[str, set],
         prefix: str = "",
     ):
         """Recursively collect field types from a document."""
@@ -198,9 +194,7 @@ class MongoSchemaExtractor:
 
         return "string"
 
-    def get_distinct_values(
-        self, field_path: str, size: int = 1000
-    ) -> List[Any]:
+    def get_distinct_values(self, field_path: str, size: int = 1000) -> list[Any]:
         """
         Get distinct values for a field from MongoDB.
 
@@ -226,9 +220,7 @@ class MongoSchemaExtractor:
             return distinct_values
 
         except Exception:
-            logger.warning(
-                "Error getting distinct values for %r", field_path, exc_info=True
-            )
+            logger.warning("Error getting distinct values for %r", field_path, exc_info=True)
             return []
 
     def get_field_type(self, field_path: str) -> str:

@@ -1,0 +1,49 @@
+# Pre-commit hooks: lint + format + type-check on every commit.
+#
+# Install once with:
+#     uv run pre-commit install
+# Run on the whole repo:
+#     uv run pre-commit run --all-files
+#
+# Hooks use the locally-installed (via uv) tools rather than fetching from
+# GitHub, so they work offline and always match the version pinned in
+# pyproject.toml's dev dependency group.
+
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (lint + autofix)
+        entry: uv run ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+        pass_filenames: true
+
+      - id: ty-check
+        name: ty type check
+        entry: uv run ty check
+        language: system
+        # ty walks the configured src.include in pyproject.toml; don't pass
+        # individual file paths or it'd type-check each file in isolation.
+        pass_filenames: false
+        always_run: true
+
+  # Generic hygiene hooks (these are pure-Python; pre-commit can install them
+  # without fetching from GitHub).
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=500]

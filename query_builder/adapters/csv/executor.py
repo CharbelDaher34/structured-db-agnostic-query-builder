@@ -8,7 +8,7 @@ pandas DataFrame and returns normalized results.
 import logging
 import math
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -44,8 +44,8 @@ class CSVQueryExecutor:
         self,
         csv_path: str,
         df: Optional[pd.DataFrame] = None,
-        date_columns: Optional[List[str]] = None,
-        read_csv_kwargs: Optional[Dict[str, Any]] = None,
+        date_columns: Optional[list[str]] = None,
+        read_csv_kwargs: Optional[dict[str, Any]] = None,
     ):
         """
         Args:
@@ -73,22 +73,22 @@ class CSVQueryExecutor:
 
     def execute(
         self,
-        queries: List[Dict[str, Any]],
+        queries: list[dict[str, Any]],
         offset: int = 0,
         limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         if not queries:
             return []
         return [self._execute_single(q, offset=offset, limit=limit) for q in queries]
 
     def _execute_single(
         self,
-        query: Dict[str, Any],
+        query: dict[str, Any],
         offset: int = 0,
         limit: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         try:
-            plan: Dict[str, Any] = query.get("plan", {})
+            plan: dict[str, Any] = query.get("plan", {})
             df = self._df
 
             # 1) Match — apply chained AND of conditions
@@ -97,7 +97,7 @@ class CSVQueryExecutor:
                 df = df[mask]
 
             # 2) Grouping + aggregations + having
-            agg_result_names: Dict[str, str] = {}
+            agg_result_names: dict[str, str] = {}
             if plan.get("group_by"):
                 df, agg_result_names = self._apply_group(df, plan)
 
@@ -111,6 +111,10 @@ class CSVQueryExecutor:
                     agg_result_names=agg_result_names,
                 )
 
+            # Capture the row count BEFORE pagination so callers can compute
+            # pages. After filter/group/sort but before offset/limit.
+            total_hits = len(df)
+
             # 4) Pagination: per-slice `limit` wins over the request-level one
             slice_limit = plan.get("limit") if plan.get("limit") is not None else limit
             if offset:
@@ -120,7 +124,7 @@ class CSVQueryExecutor:
 
             documents = [self._sanitize_doc(d) for d in df.to_dict(orient="records")]
             return {
-                "total_hits": len(documents),
+                "total_hits": total_hits,
                 "documents": documents,
                 "success": True,
             }
@@ -136,7 +140,7 @@ class CSVQueryExecutor:
     # ------------------------------------------------------------------ match
 
     def _build_mask(
-        self, df: pd.DataFrame, conditions: List[Dict[str, Any]]
+        self, df: pd.DataFrame, conditions: list[dict[str, Any]]
     ) -> Optional[pd.Series]:
         if not conditions:
             return None
@@ -148,9 +152,7 @@ class CSVQueryExecutor:
                 mask &= clause
         return mask
 
-    def _condition_mask(
-        self, df: pd.DataFrame, condition: Dict[str, Any]
-    ) -> Optional[pd.Series]:
+    def _condition_mask(self, df: pd.DataFrame, condition: dict[str, Any]) -> Optional[pd.Series]:
         field = condition.get("field")
         operator = condition.get("operator")
         value = condition.get("value")
@@ -175,10 +177,7 @@ class CSVQueryExecutor:
             return col != value
         if operator == "isin":
             if isinstance(value, list):
-                if (
-                    len(value) == 2
-                    and all(_looks_like_iso_date(v) for v in value)
-                ):
+                if len(value) == 2 and all(_looks_like_iso_date(v) for v in value):
                     lo, hi = value
                     if pd.api.types.is_datetime64_any_dtype(col):
                         lo, hi = pd.Timestamp(lo), pd.Timestamp(hi)
@@ -215,14 +214,14 @@ class CSVQueryExecutor:
     # --------------------------------------------------------- group + having
 
     def _apply_group(
-        self, df: pd.DataFrame, plan: Dict[str, Any]
-    ) -> tuple[pd.DataFrame, Dict[str, str]]:
-        group_by: List[str] = list(plan["group_by"])
+        self, df: pd.DataFrame, plan: dict[str, Any]
+    ) -> tuple[pd.DataFrame, dict[str, str]]:
+        group_by: list[str] = list(plan["group_by"])
         interval = plan.get("interval")
         aggregations = plan.get("aggregations") or []
 
         # Build a grouper per group_by field — pd.Grouper(freq=...) for date columns
-        groupers: List[Any] = []
+        groupers: list[Any] = []
         for gb in group_by:
             if gb not in df.columns:
                 continue
@@ -234,8 +233,8 @@ class CSVQueryExecutor:
 
         grouped = df.groupby(groupers, dropna=False)
 
-        agg_result_names: Dict[str, str] = {}
-        agg_kwargs: Dict[str, pd.NamedAgg] = {}
+        agg_result_names: dict[str, str] = {}
+        agg_kwargs: dict[str, pd.NamedAgg] = {}
         for agg in aggregations:
             field = agg["field"]
             agg_type = agg["type"]
@@ -285,13 +284,13 @@ class CSVQueryExecutor:
     def _apply_sort(
         self,
         df: pd.DataFrame,
-        sort_entries: List[Dict[str, Any]],
+        sort_entries: list[dict[str, Any]],
         is_grouped: bool,
-        group_by_fields: List[str],
-        agg_result_names: Dict[str, str],
+        group_by_fields: list[str],
+        agg_result_names: dict[str, str],
     ) -> pd.DataFrame:
-        columns: List[str] = []
-        ascending: List[bool] = []
+        columns: list[str] = []
+        ascending: list[bool] = []
 
         for entry in sort_entries:
             field = entry["field"]
@@ -322,7 +321,7 @@ class CSVQueryExecutor:
 
     # ------------------------------------------------------------ raw query
 
-    def execute_raw(self, query: Dict[str, Any], size: int = 100) -> Dict[str, Any]:
+    def execute_raw(self, query: dict[str, Any], size: int = 100) -> dict[str, Any]:
         """
         Execute a raw "filter" against the CSV.
 
@@ -339,9 +338,7 @@ class CSVQueryExecutor:
             if mask is not None:
                 df = df[mask]
 
-            documents = [
-                self._sanitize_doc(d) for d in df.head(size).to_dict(orient="records")
-            ]
+            documents = [self._sanitize_doc(d) for d in df.head(size).to_dict(orient="records")]
             return {
                 "total_hits": len(documents),
                 "documents": documents,
@@ -361,13 +358,11 @@ class CSVQueryExecutor:
     # -------------------------------------------------------- result hygiene
 
     @staticmethod
-    def _sanitize_doc(doc: Dict[str, Any]) -> Dict[str, Any]:
+    def _sanitize_doc(doc: dict[str, Any]) -> dict[str, Any]:
         """Convert pandas-specific types (Timestamp, NaN, numpy scalars) to JSON-safe values."""
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for key, value in doc.items():
-            if isinstance(value, float) and math.isnan(value):
-                out[key] = None
-            elif value is pd.NaT:
+            if (isinstance(value, float) and math.isnan(value)) or value is pd.NaT:
                 out[key] = None
             elif isinstance(value, (pd.Timestamp, datetime, date)):
                 out[key] = value.isoformat()

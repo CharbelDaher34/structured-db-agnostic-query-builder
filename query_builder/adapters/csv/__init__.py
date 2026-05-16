@@ -4,4 +4,4 @@ from query_builder.adapters.csv.executor import CSVQueryExecutor
 from query_builder.adapters.csv.query_translator import CSVQueryTranslator
 from query_builder.adapters.csv.schema_extractor import CSVSchemaExtractor
 
-__all__ = ["CSVSchemaExtractor", "CSVQueryTranslator", "CSVQueryExecutor"]
+__all__ = ["CSVQueryExecutor", "CSVQueryTranslator", "CSVSchemaExtractor"]

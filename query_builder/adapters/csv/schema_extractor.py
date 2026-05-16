@@ -6,7 +6,7 @@ Implements ISchemaExtractor for CSV files using pandas.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 import pandas as pd
 
@@ -39,10 +39,10 @@ class CSVSchemaExtractor:
     def __init__(
         self,
         csv_path: str,
-        category_fields: Optional[List[str]] = None,
-        date_columns: Optional[List[str]] = None,
+        category_fields: Optional[list[str]] = None,
+        date_columns: Optional[list[str]] = None,
         df: Optional[pd.DataFrame] = None,
-        read_csv_kwargs: Optional[Dict[str, Any]] = None,
+        read_csv_kwargs: Optional[dict[str, Any]] = None,
     ):
         """
         Args:
@@ -67,8 +67,8 @@ class CSVSchemaExtractor:
                 kwargs.setdefault("parse_dates", self.date_columns)
             self._df = pd.read_csv(csv_path, **kwargs)
 
-        self._schema_cache: Optional[Dict[str, Any]] = None
-        self._enum_cache: Optional[Dict[str, List[Any]]] = None
+        self._schema_cache: Optional[dict[str, Any]] = None
+        self._enum_cache: Optional[dict[str, list[Any]]] = None
 
     @property
     def df(self) -> pd.DataFrame:
@@ -79,14 +79,14 @@ class CSVSchemaExtractor:
         """No-op for parity with DB adapters; nothing to close for an in-memory CSV."""
         return None
 
-    def extract_schema(self) -> Dict[str, Any]:
+    def extract_schema(self) -> dict[str, Any]:
         if self._schema_cache is not None:
             return self._schema_cache
 
-        schema: Dict[str, Any] = {}
+        schema: dict[str, Any] = {}
         for column in self._df.columns:
             normalized_type = self._normalize_dtype(column)
-            field_info: Dict[str, Any] = {"type": normalized_type}
+            field_info: dict[str, Any] = {"type": normalized_type}
             if column in self.category_fields:
                 field_info["type"] = "enum"
             schema[column] = field_info
@@ -113,7 +113,7 @@ class CSVSchemaExtractor:
         if pd.api.types.is_numeric_dtype(dtype):
             return "number"
 
-        if pd.api.types.is_string_dtype(dtype) or dtype == object:
+        if pd.api.types.is_string_dtype(dtype) or dtype is object:
             # Object columns: confirm whether the values are ISO dates.
             sample = series.dropna().head(self._DATE_SAMPLE_SIZE)
             if not sample.empty and all(_looks_like_iso_date(v) for v in sample):
@@ -122,9 +122,7 @@ class CSVSchemaExtractor:
 
         return "string"
 
-    def get_distinct_values(
-        self, field_path: str, size: int = 1000
-    ) -> List[Any]:
+    def get_distinct_values(self, field_path: str, size: int = 1000) -> list[Any]:
         if self._enum_cache and field_path in self._enum_cache:
             return self._enum_cache[field_path]
 
@@ -142,9 +140,7 @@ class CSVSchemaExtractor:
             self._enum_cache[field_path] = values
             return values
         except Exception:
-            logger.warning(
-                "Error getting distinct values for %r", field_path, exc_info=True
-            )
+            logger.warning("Error getting distinct values for %r", field_path, exc_info=True)
             return []
 
     def get_field_type(self, field_path: str) -> str:

@@ -5,22 +5,22 @@ Coordinates all components to provide a unified query interface.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel
 
 from query_builder.core.interfaces import (
-    ISchemaExtractor,
-    IQueryTranslator,
     IQueryExecutor,
+    IQueryTranslator,
+    ISchemaExtractor,
 )
-from query_builder.schema.extractor import SchemaExtractor
-from query_builder.schema.model_builder import ModelBuilder
+from query_builder.execution.executor import QueryExecutor
+from query_builder.llm.client_factory import LLMClientFactory
 from query_builder.query.filter_builder import FilterModelBuilder
 from query_builder.query.prompt_generator import PromptGenerator
 from query_builder.query.translator import QueryTranslator
-from query_builder.execution.executor import QueryExecutor
-from query_builder.llm.client_factory import LLMClientFactory
+from query_builder.schema.extractor import SchemaExtractor
+from query_builder.schema.model_builder import ModelBuilder
 
 logger = logging.getLogger(__name__)
 
@@ -38,8 +38,8 @@ class QueryOrchestrator:
         schema_extractor: ISchemaExtractor,
         query_translator: IQueryTranslator,
         query_executor: IQueryExecutor,
-        category_fields: Optional[List[str]] = None,
-        fields_to_ignore: Optional[List[str]] = None,
+        category_fields: Optional[list[str]] = None,
+        fields_to_ignore: Optional[list[str]] = None,
     ):
         """
         Initialize query orchestrator with database adapters.
@@ -57,9 +57,7 @@ class QueryOrchestrator:
         self._query_executor_impl = query_executor
 
         # Initialize layers
-        self.schema_extractor = SchemaExtractor(
-            schema_extractor, category_fields=category_fields
-        )
+        self.schema_extractor = SchemaExtractor(schema_extractor, category_fields=category_fields)
         self.query_translator = QueryTranslator(query_translator)
         self.query_executor = QueryExecutor(query_executor)
 
@@ -80,43 +78,49 @@ class QueryOrchestrator:
         cls,
         es_host: str,
         index_name: str,
-        category_fields: Optional[List[str]] = None,
-        fields_to_ignore: Optional[List[str]] = None,
+        category_fields: Optional[list[str]] = None,
+        fields_to_ignore: Optional[list[str]] = None,
         include_bucket_documents: bool = False,
     ) -> "QueryOrchestrator":
-        """Create orchestrator for Elasticsearch."""
+        """Create orchestrator for Elasticsearch with a single shared client."""
+        from elasticsearch import Elasticsearch
+
         from query_builder.adapters.elasticsearch import (
-            ESSchemaExtractor,
-            ESQueryTranslator,
             ESQueryExecutor,
+            ESQueryTranslator,
+            ESSchemaExtractor,
         )
+
+        # One ES client shared between schema extraction and execution.
+        client = Elasticsearch(hosts=[es_host])
 
         schema_extractor = ESSchemaExtractor(
             es_host=es_host,
             index_name=index_name,
             category_fields=category_fields,
+            client=client,
         )
-        query_translator = ESQueryTranslator(
-            include_bucket_documents=include_bucket_documents
-        )
-        query_executor = ESQueryExecutor(es_host=es_host, index_name=index_name)
+        query_translator = ESQueryTranslator(include_bucket_documents=include_bucket_documents)
+        query_executor = ESQueryExecutor(es_host=es_host, index_name=index_name, client=client)
 
-        return cls(
+        orch = cls(
             schema_extractor=schema_extractor,
             query_translator=query_translator,
             query_executor=query_executor,
             category_fields=category_fields,
             fields_to_ignore=fields_to_ignore,
         )
+        orch._shared_client = client
+        return orch
 
     @classmethod
     def from_csv(
         cls,
         csv_path: str,
-        category_fields: Optional[List[str]] = None,
-        fields_to_ignore: Optional[List[str]] = None,
-        date_columns: Optional[List[str]] = None,
-        read_csv_kwargs: Optional[Dict[str, Any]] = None,
+        category_fields: Optional[list[str]] = None,
+        fields_to_ignore: Optional[list[str]] = None,
+        date_columns: Optional[list[str]] = None,
+        read_csv_kwargs: Optional[dict[str, Any]] = None,
     ) -> "QueryOrchestrator":
         """
         Create orchestrator backed by a CSV file.
@@ -177,8 +181,8 @@ class QueryOrchestrator:
         mongo_uri: str,
         database_name: str,
         collection_name: str,
-        category_fields: Optional[List[str]] = None,
-        fields_to_ignore: Optional[List[str]] = None,
+        category_fields: Optional[list[str]] = None,
+        fields_to_ignore: Optional[list[str]] = None,
         sample_size: int = 1000,
         include_grouped_documents: bool = False,
     ) -> "QueryOrchestrator":
@@ -186,9 +190,9 @@ class QueryOrchestrator:
         from pymongo import MongoClient
 
         from query_builder.adapters.mongodb import (
-            MongoSchemaExtractor,
-            MongoQueryTranslator,
             MongoQueryExecutor,
+            MongoQueryTranslator,
+            MongoSchemaExtractor,
         )
 
         # One MongoClient shared between schema extraction and execution.
@@ -283,7 +287,7 @@ class QueryOrchestrator:
         """Generate Pydantic model from schema."""
         return self._get_model_builder().build(model_name)
 
-    def get_model_info(self) -> Dict[str, Any]:
+    def get_model_info(self) -> dict[str, Any]:
         """Get flattened field information."""
         return self._get_model_builder().get_model_info()
 
@@ -316,7 +320,7 @@ class QueryOrchestrator:
         execute: bool = True,
         offset: int = 0,
         limit: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         Convert natural language query to database query and optionally execute.
 
@@ -352,7 +356,7 @@ class QueryOrchestrator:
         model_info = self.get_model_info()
         db_queries = self.query_translator.translate(filters, model_info)
 
-        response: Dict[str, Any] = {
+        response: dict[str, Any] = {
             "natural_language_query": natural_language_query,
             "extracted_filters": filters,
             "database_queries": db_queries,
@@ -367,10 +371,10 @@ class QueryOrchestrator:
 
         return response
 
-    def query_raw(self, query: Dict[str, Any], size: int = 100) -> Dict[str, Any]:
+    def query_raw(self, query: dict[str, Any], size: int = 100) -> dict[str, Any]:
         """Execute a raw database query."""
         return self.query_executor.execute_raw(query, size)
 
-    async def query_raw_async(self, query: Dict[str, Any], size: int = 100) -> Dict[str, Any]:
+    async def query_raw_async(self, query: dict[str, Any], size: int = 100) -> dict[str, Any]:
         """Async variant of query_raw."""
         return await self.query_executor.execute_raw_async(query, size)

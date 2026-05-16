@@ -1,34 +1,39 @@
 """
 Generate system prompts for LLM query parsing.
+
+Examples are derived from the user's actual schema (a representative enum
+field, a numeric field, and a date field if any) so the LLM is grounded in
+the real field names rather than a hard-coded domain.
 """
 
 import json
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Optional
 
 
 class PromptGenerator:
     """
     Generates system prompts for LLM filter extraction.
 
-    Creates comprehensive prompts that guide the LLM to convert natural
-    language queries into structured filter objects.
+    The system prompt has four parts:
+      1. The data schema (source of truth for field names + enum values)
+      2. The output JSON shape (compact reference)
+      3. The hard rules
+      4. A small number of worked examples — constructed from the user's
+         own schema where possible, so the LLM sees field names it will
+         actually need to emit.
     """
 
-    # Above this many enum values, the system prompt only lists a sample plus a count
-    # to avoid blowing up the prompt size and the LLM context window.
+    # Enum fields with more values than this get truncated in the prompt to
+    # keep context size sane. The full list still lives in model_info and the
+    # discriminated-union validator enforces membership.
     MAX_ENUM_VALUES_INLINE = 50
 
-    def __init__(self, model_info: Dict[str, Any], max_enum_values_inline: int | None = None):
-        """
-        Initialize prompt generator.
-
-        Args:
-            model_info: Flattened field information from ModelBuilder
-            max_enum_values_inline: Maximum enum values to embed inline before summarising.
-                When an enum field has more values than this, only the first N are shown,
-                followed by a total-count hint. Pass 0 to never truncate.
-        """
+    def __init__(
+        self,
+        model_info: dict[str, Any],
+        max_enum_values_inline: int | None = None,
+    ):
         self.model_info = model_info
         self.max_enum_values_inline = (
             max_enum_values_inline
@@ -36,12 +41,14 @@ class PromptGenerator:
             else self.MAX_ENUM_VALUES_INLINE
         )
 
-    def _summarise_model_info(self) -> Dict[str, Any]:
-        """Return a copy of model_info with large enum value lists trimmed for prompt embedding."""
+    # ------------------------------------------------------------------ schema
+
+    def _summarise_model_info(self) -> dict[str, Any]:
+        """Trim large enum value lists so the prompt stays a reasonable size."""
         if not self.max_enum_values_inline:
             return self.model_info
 
-        summary: Dict[str, Any] = {}
+        summary: dict[str, Any] = {}
         for field, info in self.model_info.items():
             if (
                 info.get("type") == "enum"
@@ -59,214 +66,278 @@ class PromptGenerator:
                 summary[field] = info
         return summary
 
+    # ------------------------------------------------- schema-grounded examples
+
+    @staticmethod
+    def _looks_like_id(field_name: str) -> bool:
+        """Heuristic: skip 'id'-looking numeric fields for avg/sum examples."""
+        leaf = field_name.split(".")[-1].lower()
+        return leaf == "id" or leaf.endswith("_id") or leaf.endswith("id")
+
+    def _pick_representative_fields(self) -> dict[str, Optional[Any]]:
+        """
+        Pick one field of each major type for use in example queries.
+
+        - Enum: prefer the field with the smallest value-cardinality (so the
+          example doesn't drown the model in unrelated values).
+        - Numeric: prefer fields that don't look like IDs — averaging an ID
+          column is semantically meaningless and confuses the model.
+        """
+        enum: Optional[tuple[str, list]] = None
+        numeric: Optional[str] = None
+        numeric_id_fallback: Optional[str] = None
+        date: Optional[str] = None
+        string: Optional[str] = None
+        boolean: Optional[str] = None
+
+        for name, info in self.model_info.items():
+            t = info.get("type")
+            if t == "enum" and info.get("values"):
+                vals = info["values"]
+                if enum is None or len(vals) < len(enum[1]):
+                    enum = (name, vals)
+            elif t == "number":
+                if self._looks_like_id(name):
+                    if numeric_id_fallback is None:
+                        numeric_id_fallback = name
+                elif numeric is None:
+                    numeric = name
+            elif t == "date" and date is None:
+                date = name
+            elif t == "string" and string is None:
+                string = name
+            elif t == "boolean" and boolean is None:
+                boolean = name
+
+        return {
+            "enum": enum,
+            "numeric": numeric or numeric_id_fallback,
+            "date": date,
+            "string": string,
+            "boolean": boolean,
+        }
+
+    def _build_examples(self) -> list[str]:
+        """
+        Build a small set of worked examples using fields from the actual
+        schema. Each example is a `**User:**` + ` ```json` fenced block.
+        """
+        picks = self._pick_representative_fields()
+        examples: list[str] = []
+
+        enum = picks["enum"]
+        numeric = picks["numeric"]
+        date = picks["date"]
+
+        # --- Example 1: simple filter on an enum value
+        if enum:
+            field, values = enum
+            value = values[0]
+            examples.append(
+                self._example(
+                    user=f'Show me records where {field} is "{value}".',
+                    slices=[
+                        {
+                            "conditions": [
+                                {
+                                    "type": "EnumFilter",
+                                    "field": field,
+                                    "operator": "is",
+                                    "value": value,
+                                }
+                            ]
+                        }
+                    ],
+                )
+            )
+
+        # --- Example 2: top-N + sort on a numeric
+        if numeric:
+            sort_field = numeric
+            examples.append(
+                self._example(
+                    user=f"Show me the top 5 records sorted by {sort_field} descending.",
+                    slices=[
+                        {
+                            "conditions": [],
+                            "sort": [{"field": sort_field, "order": "desc"}],
+                            "limit": 5,
+                        }
+                    ],
+                )
+            )
+
+        # --- Example 3: group + aggregate (and an optional date interval)
+        if enum and numeric:
+            field, _ = enum
+            examples.append(
+                self._example(
+                    user=f"For each {field}, what is the average {numeric}?",
+                    slices=[
+                        {
+                            "conditions": [],
+                            "group_by": [field],
+                            "aggregations": [{"field": numeric, "type": "avg"}],
+                        }
+                    ],
+                )
+            )
+        if date and numeric:
+            examples.append(
+                self._example(
+                    user=f"Show me the monthly total of {numeric} grouped by {date}.",
+                    slices=[
+                        {
+                            "conditions": [],
+                            "group_by": [date],
+                            "interval": "month",
+                            "aggregations": [{"field": numeric, "type": "sum"}],
+                        }
+                    ],
+                )
+            )
+
+        # --- Example 4: multi-slice comparison on two enum values
+        if enum and len(enum[1]) >= 2:
+            field, values = enum
+            a, b = values[0], values[1]
+            examples.append(
+                self._example(
+                    user=f'Compare records where {field} is "{a}" with those where it is "{b}".',
+                    slices=[
+                        {
+                            "conditions": [
+                                {"type": "EnumFilter", "field": field, "operator": "is", "value": a}
+                            ]
+                        },
+                        {
+                            "conditions": [
+                                {"type": "EnumFilter", "field": field, "operator": "is", "value": b}
+                            ]
+                        },
+                    ],
+                )
+            )
+
+        # --- Example 5: an invalid enum value — show that we DROP the condition
+        if enum:
+            field, values = enum
+            examples.append(self._invalid_enum_example(field, values))
+
+        # If the schema is so sparse we picked nothing, fall back to a generic
+        # abstract example to keep the section non-empty.
+        if not examples:
+            examples.append(
+                self._example(
+                    user="Show me everything.",
+                    slices=[{"conditions": []}],
+                    note=(
+                        "(no schema fields available for a more specific example "
+                        "— rely on the schema in section 2)"
+                    ),
+                )
+            )
+
+        return examples
+
+    @staticmethod
+    def _example(
+        user: str,
+        slices: list[dict[str, Any]],
+        note: Optional[str] = None,
+    ) -> str:
+        body = json.dumps({"filters": slices}, indent=2)
+        note_line = f"\n*Note*: {note}" if note else ""
+        return f'**User**: "{user}"\n```json\n{body}\n```{note_line}'
+
+    def _invalid_enum_example(self, field: str, valid_values: list[Any]) -> str:
+        # Pick a value that is NOT in the enum list
+        invalid_value = "DEFINITELY_NOT_A_VALID_VALUE"
+        if isinstance(valid_values[0], str) and invalid_value in valid_values:
+            invalid_value = invalid_value + "_X"
+        return (
+            f'**User**: "Show me records where {field} is '
+            f'\\"{invalid_value}\\"."\n'
+            f"```json\n"
+            f"{json.dumps({'filters': [{'conditions': []}]}, indent=2)}\n"
+            f"```\n"
+            f"*Note*: `{invalid_value}` is not in the valid values for `{field}` "
+            f"(`{valid_values[:5]}{'...' if len(valid_values) > 5 else ''}`), "
+            f"so we DROP the condition instead of inventing a value. The query "
+            f"returns all records."
+        )
+
+    # --------------------------------------------------------- main entry point
+
     def generate_system_prompt(self) -> str:
-        """
-        Generate comprehensive system prompt for LLM.
+        """Render the full system prompt as a single string."""
+        today = datetime.now().strftime("%Y-%m-%d")
+        schema_json = json.dumps(self._summarise_model_info(), indent=2)
+        examples = "\n\n".join(self._build_examples())
 
-        Returns:
-            System prompt string with instructions and examples
-        """
-        return f"""
-Today is {datetime.now().strftime("%Y-%m-%d")}
+        return _PROMPT_TEMPLATE.format(
+            today=today,
+            schema_json=schema_json,
+            examples=examples,
+        )
 
-### 1. Your Goal
-You are an expert assistant that converts a user's natural-language question into a structured JSON filter. Your output MUST strictly follow the JSON schema provided below.
 
-### 2. Available Data Schema
-This is the data you can query. Fields are specified as `object.field`.
-Note: any enum field marked `"values_truncated": true` lists only a sample of valid values; the total count is in `total_values`.
+_PROMPT_TEMPLATE = """\
+Today is {today}.
 
-{json.dumps(self._summarise_model_info(), indent=2)}
+## 1. Your task
+Convert the user's natural-language question into a single JSON object that strictly conforms to the `QueryFilters` schema. Output only the JSON — no commentary, no markdown fences.
 
-### 3. How to Build the JSON Filter
-Your entire output must be a single JSON object with one key, `filters`. This key holds a list of "slices". Each slice represents a set of data.
+## 2. Data schema (the ONLY valid field names)
+Every `field` value you emit MUST be a key from the JSON below. If a user's term has no matching field, DROP that condition rather than invent a field.
 
-Each slice has "conditions": [list of filter objects]. Use the structure matching the field's type from the schema and specify the "type" field:
+Enum fields list their valid values inline. If `"values_truncated": true`, only a sample of the full set is shown — the full count is in `total_values`, and the validator enforces membership against the full set.
 
-- For string fields: {{"type": "StringFilter", "field": "...", "operator": "is/contains/etc", "value": "text" or ["text1", "text2"]}}
-- For number fields: {{"type": "NumberFilter", "field": "...", "operator": "< / > / between / etc", "value": 100 or [100, 200]}}
-- For date fields: {{"type": "DateFilter", "field": "...", "operator": "< / > / between / etc", "value": "2024-01-01" or ["2024-01-01", "2024-12-31"]}}
-- For boolean fields: {{"type": "BooleanFilter", "field": "...", "operator": "is", "value": true}}
-- For enum fields: {{"type": "EnumFilter", "field": "...", "operator": "is/isin/etc", "value": "value" or ["value1", "value2"]}}
-
-Supported Operators by Type:
-- String: is, different, contains, isin, notin, exists
-- Number: <, >, is, different, between, isin, notin, exists
-- Date: <, >, is, different, between, exists
-- Boolean: is, different, exists
-- Enum: is, different, isin, notin, exists
-
-Example Filter:
-{{
-  "filters": [
-    {{
-      "conditions": [
-        {{
-          "type": "StringFilter",
-          "field": "merchant.name",
-          "operator": "contains",
-          "value": "Starbucks"
-        }},
-        {{
-          "type": "NumberFilter",
-          "field": "transaction.amount",
-          "operator": ">",
-          "value": 100
-        }}
-      ]
-    }}
-  ]
-}}
-
-#### Slice Options
-Each slice in the `filters` list can have these keys:
-- `conditions`: A list of filter conditions (as above)
-- `sort`: A list of fields to sort by asc or desc (e.g., `[{{\\"field\\": \\"transaction.amount\\", \\"order\\": \\"desc\\"}}]`)
-- `limit`: The maximum number of results to return.
-- `group_by`: A list of fields to group by.
-- `aggregations`: A list of calculations to perform on groups (e.g., `[{{\\"field\\": \\"transaction.amount\\", \\"type\\": \\"sum\\"}}]`). An aggregation can also include a `having_operator` and `having_value` to filter groups based on the result.
-- `interval`: Use for date grouping (`day`, `week`, `month`, `year`). Defaults to `month`.
-
-### 4. Critical Rules & Guardrails
-- **ALWAYS use the field names from the schema.** Do not invent fields. If a user's term is ambiguous (e.g., "category"), map it to the most likely schema field (e.g., `transaction.receiver.category_type`).
-- **For ENUM fields: ONLY use values from the provided list.** If the user requests a value not in the enum list, SKIP that condition entirely. Example: if user asks for "location = New York" but the enum values are ["London", "Paris", "Tokyo"], omit the location filter.
-- **`aggregations` and `interval` ONLY work with `group_by`.** If there is no `group_by`, do not use `aggregations` or `interval`.
-- **`interval` is ONLY for date fields.** Do not use it when grouping by non-date fields.
-- **Comparisons mean multiple slices.** If the user says "compare A with B", create two slices in the `filters` list. The first for A, the second for B.
-- **Be precise with dates.** Convert relative dates like "last month" or "this year" into specific date ranges (e.g., `"operator": "between", "value": ["2024-01-01", "2024-12-31"]`).
-- **DO NOT add a `limit` unless the user explicitly specifies one** (e.g., "top 5", "first 10", "show me 20"). If the user says "show me my transactions" or "recent transactions" without a number, omit the `limit` field entirely.
-
-### 5. Realistic Examples
-
-#### Example 1: Simple Filtering (NO LIMIT - User didn't specify a number)
-**User**: "what were my transactions at starbucks?"
 ```json
-{{
-  "filters": [
-    {{
-      "conditions": [
-        {{ "type": "StringFilter", "field": "transaction.receiver.name", "operator": "is", "value": "Starbucks" }}
-      ]
-    }}
-  ]
-}}
-```
-**Note**: No `limit` field because the user didn't say "top 5" or "first 10", etc.
-
-#### Example 2: Time-Based Aggregation
-**User**: "How much did I spend on food each month this year?"
-```json
-{{{{
-  "filters": [
-    {{{{
-      "conditions": [
-        {{{{ "type": "EnumFilter", "field": "transaction.receiver.category_type", "operator": "is", "value": "food" }}}},
-        {{{{ "type": "DateFilter", "field": "transaction.timestamp", "operator": "between", "value": ["2024-01-01", "2024-12-31"] }}}}
-      ],
-      "group_by": ["transaction.timestamp"],
-      "interval": "month",
-      "aggregations": [
-        {{{{ "field": "transaction.amount", "type": "sum" }}}}
-      ]
-    }}}}
-  ]
-}}}}
+{schema_json}
 ```
 
-#### Example 3: Two-Slice Comparison
-**User**: "Compare my spending on flights vs hotels for my gold card last year."
-```json
-{{{{
-  "filters": [
-    {{{{
-      "conditions": [
-        {{{{ "type": "EnumFilter", "field": "transaction.receiver.category_type", "operator": "is", "value": "flight" }}}},
-        {{{{ "type": "EnumFilter", "field": "card_type", "operator": "is", "value": "GOLD" }}}},
-        {{{{ "type": "DateFilter", "field": "transaction.timestamp", "operator": "between", "value": ["2023-01-01", "2023-12-31"] }}}}
-      ]
-    }}}},
-    {{{{
-      "conditions": [
-        {{{{ "type": "EnumFilter", "field": "transaction.receiver.category_type", "operator": "is", "value": "hotel" }}}},
-        {{{{ "type": "EnumFilter", "field": "card_type", "operator": "is", "value": "GOLD" }}}},
-        {{{{ "type": "DateFilter", "field": "transaction.timestamp", "operator": "between", "value": ["2023-01-01", "2023-12-31"] }}}}
-      ]
-    }}}}
-  ]
-}}}}
-```
+## 3. Output shape
 
-#### Example 4: Complex Query with Sorting and Limiting (LIMIT ONLY WHEN USER SPECIFIES A NUMBER)
-**User**: "What were my **top 5** most expensive transactions in London, and when did they happen?"
-```json
-{{{{
-  "filters": [
-    {{{{
-      "conditions": [
-        {{{{ "type": "StringFilter", "field": "transaction.receiver.location", "operator": "is", "value": "London" }}}}
-      ],
-      "sort": [
-        {{{{ "field": "transaction.amount", "order": "desc" }}}}
-      ],
-      "limit": 5
-    }}}}
-  ]
-}}}}
-```
-**Note**: The `limit: 5` is included ONLY because the user explicitly said "top 5". If they had said "show me my most expensive transactions in London", you would omit the `limit` field.
+The top-level object is `{{ "filters": [...] }}`. Each entry in `filters` is a slice that describes one set of records. A slice has these keys:
 
-#### Example 5: Having Clause
-**User**: "Show me all transactions on days where I made more than one purchase."
-```json
-{{{{
-  "filters": [
-    {{{{
-      "group_by": ["transaction.timestamp"],
-      "interval": "day",
-      "aggregations": [
-        {{{{
-          "field": "transaction.id",
-          "type": "count",
-          "having_operator": ">",
-          "having_value": 1
-        }}}}
-      ]
-    }}}}
-  ]
-}}}}
-```
+| Key | Type | When to use |
+|---|---|---|
+| `conditions` | list of typed filters | AND-joined filters on individual fields |
+| `sort` | list of `{{field, order}}` | When the user mentions ordering ("highest", "oldest"...) |
+| `limit` | int | ONLY when the user names a specific number ("top 5", "first 10") |
+| `group_by` | list of field names | When the user asks "per X", "by X", "for each X" |
+| `aggregations` | list of `{{field, type, having_operator?, having_value?}}` | Requires `group_by`; types: sum / avg / count / min / max |
+| `interval` | day / week / month / year | ONLY with a date `group_by`; defaults to month |
 
-#### Example 6: Handling Invalid Enum Values
-**User**: "Show me transactions in New York" (but "transaction.receiver.location" only has values: ["London", "Paris", "Beirut", "Online"])
-```json
-{{{{
-  "filters": [
-    {{{{
-      "conditions": []
-    }}}}
-  ]
-}}}}
-```
-Note: Since "New York" is not in the valid enum values, the location filter is omitted. The query returns all transactions.
+Each filter in `conditions` is one of:
 
-#### Example 7: "Recent" Transactions (NO LIMIT unless explicitly stated)
-**User**: "Show me my recent transactions"
-```json
-{{{{
-  "filters": [
-    {{{{
-      "conditions": [],
-      "sort": [
-        {{{{ "field": "transaction.timestamp", "order": "desc" }}}}
-      ]
-    }}}}
-  ]
-}}}}
-```
-**Note**: The word "recent" means sort by timestamp descending, but does NOT mean add a limit. Only add `limit` if the user says a specific number like "show me my last 10 transactions".
+| Filter | For schema type | Operators |
+|---|---|---|
+| `StringFilter` | `string` | is, different, contains, isin, notin, exists |
+| `NumberFilter` | `number` | <, >, is, different, between, isin, notin, exists |
+| `DateFilter` | `date` | <, >, is, different, between, exists |
+| `BooleanFilter` | `boolean` | is, different, exists |
+| `EnumFilter` | `enum` | is, different, isin, notin, exists |
+
+Filter shape: `{{ "type": "<Filter>", "field": "<schema_field>", "operator": "<op>", "value": <value or list> }}`. For `between`/range queries on numbers/dates, use a 2-element list.
+
+## 4. Hard rules
+
+1. **Schema fidelity.** Field names come from section 2. Never use the field names from the examples in section 5 unless they happen to appear in the schema.
+2. **Filter type matches schema type.** A `string` field can only carry a `StringFilter`, an `enum` field can only carry an `EnumFilter`, etc. Picking the wrong filter type will fail validation.
+3. **Invalid enum values are dropped, not invented.** If the user names a value that isn't in the enum list, omit the condition entirely.
+4. **`aggregations` and `interval` require `group_by`.** Don't emit them in an ungrouped slice.
+5. **`interval` requires a date field in `group_by`.** Don't use it when grouping by a non-date field.
+6. **Comparisons → multiple slices.** "Compare A and B" produces two slices, one per side.
+7. **Default = no limit.** Add `limit` only when the user names a specific number. "Recent" → sort desc, no limit.
+8. **Resolve relative dates to absolute ranges.** "Last month" → `between [first, last]` using today's date.
+
+## 5. Worked examples (using THIS schema's field names)
+
+{examples}
 
 ━━━━━━━━━━━━━━━━━━━━━━━
-📤 **Your Task**
-After reading the user question, output **only** the corresponding JSON object (starting with `{{ "filters": [...] }}`). No extra explanation.
+After reading the user's question, output ONLY the JSON object (starting with `{{ "filters": [...] }}`). No explanation, no markdown fences.
 ━━━━━━━━━━━━━━━━━━━━━━━
 """

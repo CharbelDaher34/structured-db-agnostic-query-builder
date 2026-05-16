@@ -5,7 +5,7 @@ Converts normalized filters to Elasticsearch DSL queries.
 """
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 
 class ESQueryTranslator:
@@ -27,82 +27,82 @@ class ESQueryTranslator:
         """
         self.include_bucket_documents = include_bucket_documents
         self.bucket_documents_size = bucket_documents_size
-    
+
     def translate(
-        self, filters: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        self, filters: dict[str, Any], model_info: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """
         Convert QueryFilters to Elasticsearch DSL queries.
-        
+
         Args:
             filters: Structured filters from LLM (QueryFilters format)
             model_info: Field information for validation and query building
-            
+
         Returns:
             List of Elasticsearch DSL query objects
         """
         if not filters or "filters" not in filters:
             return [{"query": {"match_all": {}}}]
-        
-        elastic_queries: List[Dict[str, Any]] = []
-        
+
+        elastic_queries: list[dict[str, Any]] = []
+
         for filter_slice in filters["filters"]:
             elastic_query = self._translate_slice(filter_slice, model_info)
             elastic_queries.append(elastic_query)
-        
+
         return elastic_queries
-    
+
     def _translate_slice(
-        self, filter_slice: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, filter_slice: dict[str, Any], model_info: dict[str, Any]
+    ) -> dict[str, Any]:
         """Translate a single query slice to ES DSL."""
-        must_clauses: List[Dict[str, Any]] = []
-        
+        must_clauses: list[dict[str, Any]] = []
+
         # Process conditions
         for condition in filter_slice.get("conditions", []):
             clause = self._translate_condition(condition, model_info)
             if clause:
                 must_clauses.append(clause)
-        
+
         # Build base query
         if must_clauses:
-            elastic_query: Dict[str, Any] = {
-                "query": {"bool": {"must": must_clauses}}
-            }
+            elastic_query: dict[str, Any] = {"query": {"bool": {"must": must_clauses}}}
         else:
             elastic_query = {"query": {"match_all": {}}}
-        
+
         # Process sort
-        if "sort" in filter_slice and filter_slice["sort"]:
+        if filter_slice.get("sort"):
             sort_configs = []
             for s in filter_slice["sort"]:
                 sort_configs.append({s["field"]: {"order": s.get("order", "asc")}})
             elastic_query["sort"] = sort_configs
-        
+
         # Process limit
         if "limit" in filter_slice:
             elastic_query["size"] = filter_slice["limit"]
-        
+
         # Process group_by and aggregations
-        if "group_by" in filter_slice and filter_slice["group_by"]:
+        if filter_slice.get("group_by"):
             aggs = self._build_aggregations(filter_slice, model_info)
             elastic_query["aggs"] = aggs
             elastic_query["size"] = 0  # Don't return documents for aggregations
-        
+
         return elastic_query
-    
+
     def _translate_condition(
-        self, condition: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+        self, condition: dict[str, Any], model_info: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
         """Translate a single condition to ES clause."""
         field = condition["field"]
         operator = condition["operator"]
         value = condition["value"]
-        
-        # Determine if we need .keyword suffix
-        is_string = isinstance(value, str) and not self._is_date_string(value)
-        exact_field = self._keyword_field(field) if is_string else field
-        
+
+        # Determine if we need .keyword suffix. Only `text` fields need it;
+        # `keyword` fields are exact-match already, and suffixing them yields
+        # a non-existent `field.keyword.keyword`-style path.
+        is_string_value = isinstance(value, str) and not self._is_date_string(value)
+        exact_field = self._exact_match_field(field, model_info) if is_string_value else field
+
         # Build clause based on operator
         if operator == ">":
             return {"range": {field: {"gt": value}}}
@@ -115,10 +115,7 @@ class ESQueryTranslator:
         elif operator == "isin":
             if isinstance(value, list):
                 # Check if it's a date range (2 dates)
-                if (
-                    len(value) == 2
-                    and all(self._is_date_string(str(v)) for v in value)
-                ):
+                if len(value) == 2 and all(self._is_date_string(str(v)) for v in value):
                     return {"range": {field: {"gte": value[0], "lte": value[1]}}}
                 else:
                     return {"terms": {exact_field: value}}
@@ -133,37 +130,33 @@ class ESQueryTranslator:
             if isinstance(value, list) and len(value) == 2:
                 return {"range": {field: {"gte": value[0], "lte": value[1]}}}
         elif operator == "contains":
-            return {
-                "wildcard": {
-                    exact_field: {"value": f"*{value}*", "case_insensitive": True}
-                }
-            }
+            return {"wildcard": {exact_field: {"value": f"*{value}*", "case_insensitive": True}}}
         elif operator == "exists":
             if value is True:
                 return {"exists": {"field": field}}
             elif value is False:
                 return {"bool": {"must_not": {"exists": {"field": field}}}}
-        
+
         return None
-    
+
     def _build_aggregations(
-        self, filter_slice: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, filter_slice: dict[str, Any], model_info: dict[str, Any]
+    ) -> dict[str, Any]:
         """Build ES aggregations from group_by and aggregations."""
         group_fields = filter_slice["group_by"]
         limit_config = filter_slice.get("limit", 100)
-        
-        aggs: Dict[str, Any] = {}
+
+        aggs: dict[str, Any] = {}
         current_agg = aggs
-        
+
         # Build nested aggregations for each group_by field
         for i, gf in enumerate(group_fields):
             agg_name = f"group_by_{i}"
             field_type = model_info.get(gf, {}).get("type")
-            
+
             if field_type == "date":
                 interval = filter_slice.get("interval", "month")
-                
+
                 # Set format based on interval
                 format_map = {
                     "day": "yyyy-MM-dd",
@@ -172,7 +165,7 @@ class ESQueryTranslator:
                     "year": "yyyy",
                 }
                 format_str = format_map.get(interval, "yyyy-MM")
-                
+
                 current_agg[agg_name] = {
                     "date_histogram": {
                         "field": gf,
@@ -182,19 +175,17 @@ class ESQueryTranslator:
                 }
             else:
                 agg_field = (
-                    self._keyword_field(gf)
+                    self._exact_match_field(gf, model_info)
                     if field_type in ("string", "enum", "text")
                     else gf
                 )
-                current_agg[agg_name] = {
-                    "terms": {"field": agg_field, "size": limit_config}
-                }
-            
+                current_agg[agg_name] = {"terms": {"field": agg_field, "size": limit_config}}
+
             # Prepare for next level
             if i < len(group_fields) - 1:
                 current_agg[agg_name]["aggs"] = {}
                 current_agg = current_agg[agg_name]["aggs"]
-        
+
         # Navigate to the deepest aggregation level
         target_for_sub_aggs = aggs
         for i in range(len(group_fields)):
@@ -204,42 +195,40 @@ class ESQueryTranslator:
             else:
                 target_for_sub_aggs = target_for_sub_aggs[group_agg_name]
                 break
-        
+
         sub_aggs = target_for_sub_aggs.setdefault("aggs", {})
 
         # Only include per-bucket documents when explicitly requested. top_hits is expensive
         # and unnecessary for pure metric aggregations.
         if self.include_bucket_documents:
             sub_aggs["documents"] = {"top_hits": {"size": self.bucket_documents_size}}
-        
+
         # Process aggregation metrics
         having_clauses = []
-        if "aggregations" in filter_slice and filter_slice["aggregations"]:
+        if filter_slice.get("aggregations"):
             for agg in filter_slice["aggregations"]:
                 agg_metric_name = f"{agg['type'].lower()}_{agg['field'].replace('.', '_')}"
-                
+
                 field_for_agg = agg["field"]
                 field_info = model_info.get(field_for_agg, {})
                 field_type = field_info.get("type")
-                
+
                 # Use .keyword for count on string fields
                 if agg["type"] == "count" and field_type in ("string", "enum", "text"):
-                    field_for_agg = self._keyword_field(field_for_agg)
-                
+                    field_for_agg = self._exact_match_field(field_for_agg, model_info)
+
                 # Build metric aggregation
                 if agg["type"] == "sum":
                     sub_aggs[agg_metric_name] = {"sum": {"field": field_for_agg}}
                 elif agg["type"] == "avg":
                     sub_aggs[agg_metric_name] = {"avg": {"field": field_for_agg}}
                 elif agg["type"] == "count":
-                    sub_aggs[agg_metric_name] = {
-                        "value_count": {"field": field_for_agg}
-                    }
+                    sub_aggs[agg_metric_name] = {"value_count": {"field": field_for_agg}}
                 elif agg["type"] == "min":
                     sub_aggs[agg_metric_name] = {"min": {"field": field_for_agg}}
                 elif agg["type"] == "max":
                     sub_aggs[agg_metric_name] = {"max": {"field": field_for_agg}}
-                
+
                 # Check for having clause
                 if agg.get("having_operator") and agg.get("having_value") is not None:
                     having_clauses.append(
@@ -249,13 +238,13 @@ class ESQueryTranslator:
                             "value": agg["having_value"],
                         }
                     )
-        
+
         # Add bucket_selector for having clauses
         if having_clauses:
             buckets_path = {}
             script_parts = []
             op_map = {">": ">", "<": "<", "is": "==", "different": "!=", ">=": ">=", "<=": "<="}
-            
+
             for i, clause in enumerate(having_clauses):
                 script_var = f"var_{i}"
                 buckets_path[script_var] = clause["metric_name"]
@@ -263,22 +252,44 @@ class ESQueryTranslator:
                 value = clause["value"]
                 script_value = f"'{value}'" if isinstance(value, str) else value
                 script_parts.append(f"params.{script_var} {op_symbol} {script_value}")
-            
+
             script = " && ".join(script_parts)
-            
+
             sub_aggs["having_filter"] = {
                 "bucket_selector": {"buckets_path": buckets_path, "script": script}
             }
-        
+
         return aggs
-    
+
     @staticmethod
     def _keyword_field(field: str) -> str:
         """Add .keyword suffix if not already present."""
         if field.endswith(".keyword"):
             return field
         return f"{field}.keyword"
-    
+
+    @classmethod
+    def _exact_match_field(cls, field: str, model_info: dict[str, Any]) -> str:
+        """
+        Return the field path ES should use for an exact-match term/agg query.
+
+        - If the field is mapped as `keyword`, return it as-is (no suffix).
+        - If the field is `text` with a `.keyword` sub-field (or no metadata
+          is available), append `.keyword`.
+        - For non-string mappings, return the raw path.
+        """
+        if field.endswith(".keyword"):
+            return field
+        info = (model_info or {}).get(field, {})
+        es_type = info.get("es_type")
+        if es_type == "keyword":
+            return field
+        if es_type == "text" and info.get("has_keyword_subfield") is False:
+            # Text field without a keyword sub-field — best we can do is the
+            # raw text field; term queries will work on analyzed tokens only.
+            return field
+        return f"{field}.keyword"
+
     @staticmethod
     def _is_date_string(s: Any) -> bool:
         """Check if string parses as an ISO date or datetime."""

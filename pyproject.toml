@@ -12,8 +12,8 @@ authors = [{ name = "Charbel Daher", email = "charbeldaher34@gmail.com" }]
 license = { text = "MIT" }
 
 dependencies = [
-    "pydantic>=2.11.7",
-    "pydantic-ai>=0.4.0",
+    "pydantic>=2.13.4",
+    "pydantic-ai>=1.97.0",
     "pandas>=2.3.1",
 ]
 
@@ -37,3 +37,66 @@ include = [
     "README.md",
     "pyproject.toml",
 ]
+
+[dependency-groups]
+dev = [
+    "elasticsearch==8.11.1",
+    "pre-commit>=4.6.0",
+    "pymongo>=4.17.0",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.13",
+    "ty>=0.0.37",
+]
+
+# -------------------------------------------------------------------- ruff
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = [".venv", "dist", "build"]
+
+[tool.ruff.lint]
+# E/F: pycodestyle + pyflakes core. I: isort. UP: pyupgrade.
+# B: bugbear (likely-bug patterns). SIM: simplifications.
+# C4: comprehensions. RUF: ruff-native rules.
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
+ignore = [
+    "E501",   # line length is handled by the formatter
+    "B008",   # function-call-in-default (FastAPI/pydantic-ai patterns rely on this)
+    "SIM108", # ternary-vs-if — not always more readable
+    "UP007",  # Optional[X] vs X | None — pydantic v2 prefers the former
+    "UP045",  # ditto for function arg annotations
+    "UP042",  # StrEnum requires py3.11+ and pydantic-ai expects (str, Enum) subclasses
+    "RUF012", # mutable class attributes ClassVar annotation — adds noise without value here
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use unused fixture imports and assertion-style patterns
+"tests/**" = ["F401", "F811", "B015"]
+# Examples are illustrative scripts, not library code
+"examples/**" = ["F401", "E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------- ty
+
+[tool.ty.src]
+include = ["query_builder"]
+exclude = ["tests", "examples", "dist", "build", ".venv"]
+
+[tool.ty.rules]
+# pydantic-ai dynamic Agent/Model construction and dynamic Pydantic
+# create_model defeat most static type analysis. Downgrade these specific
+# rules to warn rather than littering # type: ignore. Other ty rules still
+# fail the build.
+possibly-unresolved-reference = "warn"
+unresolved-attribute = "warn"
+invalid-argument-type = "warn"
+unresolved-import = "warn"
+no-matching-overload = "warn"        # pydantic-ai Agent/OpenAIProvider, pandas reset_index
+invalid-assignment = "warn"          # widening a dict[str, X] after a literal init
+invalid-type-form = "warn"           # dynamic types from Pydantic create_model
+invalid-return-type = "warn"         # dynamic create_model return shape

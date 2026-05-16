@@ -271,4 +271,3 @@ To improve the MongoDB adapter:
 ## License
 
 Part of the elastic_query_builder project.
-

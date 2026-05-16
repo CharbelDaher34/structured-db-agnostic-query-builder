@@ -5,4 +5,3 @@ from query_builder.query.prompt_generator import PromptGenerator
 from query_builder.query.translator import QueryTranslator
 
 __all__ = ["FilterModelBuilder", "PromptGenerator", "QueryTranslator"]
-

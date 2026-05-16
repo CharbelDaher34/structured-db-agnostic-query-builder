@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs for the same ref when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-typecheck-test:
+    name: Lint, type-check, and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install project + dev deps
+        run: uv sync --all-extras
+
+      # --- lint -------------------------------------------------------------
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format (check only)
+        run: uv run ruff format --check .
+
+      # --- type check -------------------------------------------------------
+      - name: ty type check
+        run: uv run ty check
+
+      # --- tests ------------------------------------------------------------
+      # Skip the `llm` marker: those tests need a real LLM API key. They can
+      # be enabled per-PR by setting the LLM_API_KEY repo secret and dropping
+      # the `-m 'not llm'` filter.
+      - name: Pytest (offline)
+        run: uv run pytest -q -m 'not llm'

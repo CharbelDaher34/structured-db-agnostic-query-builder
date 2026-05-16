@@ -10,7 +10,7 @@ self-contained execution plan with the keys the executor consumes.
 """
 
 import logging
-from typing import Any, Dict, List
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -39,17 +39,17 @@ class CSVQueryTranslator:
     }
 
     def translate(
-        self, filters: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        self, filters: dict[str, Any], model_info: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         if not filters or "filters" not in filters:
             return [{"plan": self._empty_plan()}]
 
-        plans: List[Dict[str, Any]] = []
+        plans: list[dict[str, Any]] = []
         for filter_slice in filters["filters"]:
             plans.append({"plan": self._build_plan(filter_slice, model_info)})
         return plans
 
-    def _empty_plan(self) -> Dict[str, Any]:
+    def _empty_plan(self) -> dict[str, Any]:
         return {
             "conditions": [],
             "group_by": None,
@@ -60,8 +60,8 @@ class CSVQueryTranslator:
         }
 
     def _build_plan(
-        self, filter_slice: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, filter_slice: dict[str, Any], model_info: dict[str, Any]
+    ) -> dict[str, Any]:
         plan = self._empty_plan()
 
         # Conditions — drop any whose field is not in model_info (LLM hallucinated)

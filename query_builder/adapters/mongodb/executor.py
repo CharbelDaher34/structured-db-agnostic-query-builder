@@ -5,7 +5,7 @@ Executes MongoDB aggregation pipelines and returns normalized results.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 from pymongo import MongoClient
 from pymongo.collection import Collection
@@ -58,10 +58,10 @@ class MongoQueryExecutor:
 
     def execute(
         self,
-        queries: List[Dict[str, Any]],
+        queries: list[dict[str, Any]],
         offset: int = 0,
         limit: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """
         Execute multiple MongoDB aggregation pipelines.
 
@@ -86,33 +86,42 @@ class MongoQueryExecutor:
 
     def _execute_single(
         self,
-        query: Dict[str, Any],
+        query: dict[str, Any],
         offset: int = 0,
         limit: Optional[int] = None,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute a single MongoDB aggregation pipeline."""
         try:
-            pipeline = list(query.get("pipeline", []))
+            base_pipeline = list(query.get("pipeline", []))
+            has_limit = any("$limit" in stage for stage in base_pipeline)
 
-            # Inject pagination only if the pipeline doesn't already define a $limit
-            has_limit = any("$limit" in stage for stage in pipeline)
+            # Build the final pipeline by appending pagination stages. Compute
+            # total_hits from the pre-pagination pipeline so callers can paginate.
+            paginated = list(base_pipeline)
             if offset:
-                pipeline.append({"$skip": offset})
+                paginated.append({"$skip": offset})
             if limit is not None and not has_limit:
-                pipeline.append({"$limit": limit})
+                paginated.append({"$limit": limit})
 
-            if not pipeline:
+            if not paginated:
                 effective_limit = limit if limit is not None else 100
                 documents = list(self.collection.find().skip(offset).limit(effective_limit))
+                # find() with no filter — total is the collection count
+                total_hits = self.collection.estimated_document_count()
             else:
-                documents = list(self.collection.aggregate(pipeline, allowDiskUse=True))
+                documents = list(self.collection.aggregate(paginated, allowDiskUse=True))
+                if offset or limit is not None:
+                    # Re-run the pre-pagination pipeline through $count
+                    total_hits = self._count_pipeline(base_pipeline)
+                else:
+                    total_hits = len(documents)
 
             for doc in documents:
                 if "_id" in doc:
                     doc["_id"] = str(doc["_id"])
 
             return {
-                "total_hits": len(documents),
+                "total_hits": total_hits,
                 "documents": documents,
                 "success": True,
             }
@@ -126,7 +135,13 @@ class MongoQueryExecutor:
                 "success": False,
             }
 
-    def execute_raw(self, query: Dict[str, Any], size: int = 100) -> Dict[str, Any]:
+    def _count_pipeline(self, pipeline: list[dict[str, Any]]) -> int:
+        """Return the row count for a pipeline, appending a $count stage."""
+        count_pipeline = [*list(pipeline), {"$count": "n"}]
+        result = list(self.collection.aggregate(count_pipeline, allowDiskUse=True))
+        return result[0]["n"] if result else 0
+
+    def execute_raw(self, query: dict[str, Any], size: int = 100) -> dict[str, Any]:
         """
         Execute a raw MongoDB query or aggregation.
 
@@ -138,9 +153,7 @@ class MongoQueryExecutor:
         """
         try:
             if "pipeline" in query:
-                documents = list(
-                    self.collection.aggregate(query["pipeline"], allowDiskUse=True)
-                )
+                documents = list(self.collection.aggregate(query["pipeline"], allowDiskUse=True))
             elif "filter" in query:
                 documents = list(self.collection.find(query["filter"]).limit(size))
             else:

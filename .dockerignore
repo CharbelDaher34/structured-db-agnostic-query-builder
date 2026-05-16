@@ -55,4 +55,3 @@ docker-compose.yml
 .pytest_cache/
 .coverage
 htmlcov/
-

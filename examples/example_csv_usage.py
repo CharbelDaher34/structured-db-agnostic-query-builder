@@ -6,10 +6,12 @@ having clauses, and date intervals against the local examples.csv dataset
 (customer risk-model output).
 """
 
-import os
-import json
 import asyncio
+import json
+import os
+
 from dotenv import load_dotenv
+
 from query_builder import QueryOrchestrator
 
 load_dotenv()
@@ -227,6 +229,7 @@ async def main() -> None:
     except Exception as e:
         print(f"\nError: {e}")
         import traceback
+
         traceback.print_exc()
     finally:
         if orchestrator is not None:

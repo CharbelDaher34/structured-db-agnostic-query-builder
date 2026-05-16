@@ -4,10 +4,12 @@ Example usage of the query builder with MongoDB.
 3 comprehensive examples testing all functionalities with actual transaction data.
 """
 
-import os
-import json
 import asyncio
+import json
+import os
+
 from dotenv import load_dotenv
+
 from query_builder import QueryOrchestrator
 
 load_dotenv()
@@ -22,9 +24,10 @@ DEFAULT_CATEGORY_FIELDS = [
     "merchant_name",
     "merchant_country",
     "merchant_category_name",
-    "payment_card_name"
+    "payment_card_name",
 ]
-DEFAULT_FIELDS_TO_IGNORE = ["converted_currency","merchant_category_description"]
+DEFAULT_FIELDS_TO_IGNORE = ["converted_currency", "merchant_category_description"]
+
 
 def setup_orchestrator():
     """Setup MongoDB orchestrator with transaction collection."""
@@ -41,7 +44,7 @@ def setup_orchestrator():
 async def example_1_filtering_sorting_limiting(orchestrator):
     """
     Example 1: Filtering, Sorting, and Limiting
-    
+
     Tests:
     - Filter by merchantCountry (is)
     - Filter by currency (is)
@@ -50,38 +53,38 @@ async def example_1_filtering_sorting_limiting(orchestrator):
     - Sort by amount (descending)
     - Limit results (10)
     """
-    
+
     print("\n" + "=" * 80)
     print("EXAMPLE 1: Filtering, Sorting, and Limiting")
     print("=" * 80)
-    
-    query = "Show my top 10 spending records in France in USD, with amounts between $5,000 and $50,000, and merchant name containing ‘Five’."
-    
+
+    query = "Show my top 10 spending records in France in USD, with amounts between $5,000 and $50,000, and merchant name containing 'Five'."
+
     print(f"\nNatural Language Query: {query}\n")
-    
+
     result = await orchestrator.query(natural_language_query=query, execute=True)
     print("--- Extracted Filters ---")
     print(json.dumps(result["extracted_filters"], indent=2))
-    
+
     print("\n--- Generated MongoDB Pipeline ---")
     print(json.dumps(result["database_queries"][0], indent=2))
-    
+
     if "results" in result:
         res = result["results"][0]
         print("\n--- Results ---")
         print(f"Total Documents Found: {res['total_hits']}")
         print(f"Documents Returned: {len(res['documents'])}")
-        
-        if res['documents']:
+
+        if res["documents"]:
             print("\nTop Transactions:")
-            for i, doc in enumerate(res['documents'][:10], 1):
+            for i, doc in enumerate(res["documents"][:10], 1):
                 print(f"\n  {i}. {doc}")
 
 
 async def example_2_aggregations_grouping_having(orchestrator):
     """
     Example 2: Aggregations with Grouping and Having Clause
-    
+
     Tests:
     - Group by merchantCountry and channel
     - Sum aggregation (total amount)
@@ -90,48 +93,48 @@ async def example_2_aggregations_grouping_having(orchestrator):
     - Having clause (filter groups with count > 5)
     - Sort by total amount (descending)
     """
-    
+
     print("\n" + "=" * 80)
     print("EXAMPLE 2: Aggregations with Grouping and Having Clause")
     print("=" * 80)
-    
+
     query = "What is the total transaction amount, average amount, and count grouped by merchant country and channel, for groups with more than 5 transactions, sorted by total amount descending"
-    
+
     print(f"\nNatural Language Query: {query}\n")
-    
+
     result = await orchestrator.query(natural_language_query=query, execute=True)
-    
+
     print("--- Extracted Filters ---")
     print(json.dumps(result["extracted_filters"], indent=2))
-    
+
     print("\n--- Generated MongoDB Pipeline ---")
     print(json.dumps(result["database_queries"][0], indent=2))
-    
+
     if "results" in result:
         res = result["results"][0]
         print("\n--- Results ---")
         print(f"Total Groups Found: {res['total_hits']}")
         print(f"Groups Returned: {len(res['documents'])}")
-        
-        if res['documents']:
+
+        if res["documents"]:
             print("\nAggregation Results (Groups with >5 transactions):")
-            for i, doc in enumerate(res['documents'][:15], 1):
-                group_id = doc.get('_id', {})
-                
+            for i, doc in enumerate(res["documents"][:15], 1):
+                group_id = doc.get("_id", {})
+
                 # Handle both dict (multiple group fields) and string (single field)
                 if isinstance(group_id, dict):
-                    country = group_id.get('merchantCountry', 'N/A')
-                    channel = group_id.get('channel', 'N/A')
+                    country = group_id.get("merchantCountry", "N/A")
+                    channel = group_id.get("channel", "N/A")
                 else:
                     # Single field grouping
                     country = group_id
-                    channel = 'N/A'
-                
+                    channel = "N/A"
+
                 # Extract aggregation values
-                total = doc.get('sum_amount', 0)
-                avg = doc.get('avg_amount', 0)
-                count = doc.get('count_amount', 0)
-                
+                total = doc.get("sum_amount", 0)
+                avg = doc.get("avg_amount", 0)
+                count = doc.get("count_amount", 0)
+
                 print(f"\n  {i}. Country: {country}, Channel: {channel}")
                 print(f"     Total Amount: {total:,.0f}")
                 print(f"     Average Amount: {avg:,.2f}")
@@ -141,7 +144,7 @@ async def example_2_aggregations_grouping_having(orchestrator):
 async def example_3_date_range_monthly_aggregations(orchestrator):
     """
     Example 3: Date Range Filtering with Monthly Grouping and Aggregations
-    
+
     Tests:
     - Date range filtering (last 2 years)
     - Filter by merchantCountry (is)
@@ -150,45 +153,45 @@ async def example_3_date_range_monthly_aggregations(orchestrator):
     - Multiple aggregations (sum, avg, count)
     - Sort by grouped date
     """
-    
+
     print("\n" + "=" * 80)
     print("EXAMPLE 3: Date Range with Monthly Grouping and Aggregations")
     print("=" * 80)
-    
+
     query = "Show me the total transaction amount, average amount, and count grouped by month for transactions in France with USD currency from the last 2 years, sorted by month"
-    
+
     print(f"\nNatural Language Query: {query}\n")
-    
+
     result = await orchestrator.query(natural_language_query=query, execute=True)
-    
+
     print("--- Extracted Filters ---")
     print(json.dumps(result["extracted_filters"], indent=2))
-    
+
     print("\n--- Generated MongoDB Pipeline ---")
     print(json.dumps(result["database_queries"][0], indent=2))
-    
+
     if "results" in result:
         res = result["results"][0]
         print("\n--- Results ---")
         print(f"Total Monthly Groups: {res['total_hits']}")
         print(f"Groups Returned: {len(res['documents'])}")
-        
-        if res['documents']:
+
+        if res["documents"]:
             print("\nMonthly Aggregation Results (France, USD, Last 2 Years):")
-            for i, doc in enumerate(res['documents'], 1):
-                group_id = doc.get('_id', {})
-                
+            for i, doc in enumerate(res["documents"], 1):
+                group_id = doc.get("_id", {})
+
                 # Handle both dict (multiple group fields) and string (single field)
                 if isinstance(group_id, dict):
-                    month = group_id.get('timestamp', 'N/A')
+                    month = group_id.get("timestamp", "N/A")
                 else:
                     # Single field grouping - _id is the value directly
                     month = group_id
-                
-                total = doc.get('sum_amount', 0)
-                avg = doc.get('avg_amount', 0)
-                count = doc.get('count_amount', 0)
-                
+
+                total = doc.get("sum_amount", 0)
+                avg = doc.get("avg_amount", 0)
+                count = doc.get("count_amount", 0)
+
                 print(f"\n  {i}. Month: {month}")
                 print(f"     Total Amount: {total:,.0f} USD")
                 print(f"     Average Amount: {avg:,.2f} USD")
@@ -200,24 +203,25 @@ async def main():
     print("\n" + "=" * 80)
     print("MONGODB QUERY BUILDER - 3 COMPREHENSIVE EXAMPLES")
     print("=" * 80)
-    
+
     try:
         orchestrator = setup_orchestrator()
-        
+
         print("\n--- Schema Summary ---")
         orchestrator.print_model_summary()
-        
+
         # Run all 3 examples
         await example_1_filtering_sorting_limiting(orchestrator)
         await example_2_aggregations_grouping_having(orchestrator)
         await example_3_date_range_monthly_aggregations(orchestrator)
-        
+
     except Exception as e:
         print(f"\n❌ Error: {e}")
         print("\nMake sure MongoDB is running and MONGO_URI is configured in .env")
         import traceback
+
         traceback.print_exc()
-    
+
     print("\n" + "=" * 80)
     print("ALL EXAMPLES COMPLETED")
     print("=" * 80)

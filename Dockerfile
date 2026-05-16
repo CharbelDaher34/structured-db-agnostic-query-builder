@@ -16,8 +16,7 @@ RUN uv sync --frozen
 COPY . .
 
 # Expose port
-EXPOSE 8837 
+EXPOSE 8837
 
 # Run the API using uv
 CMD ["uv", "run", "uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8837`"]
-

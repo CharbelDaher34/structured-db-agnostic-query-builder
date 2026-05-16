@@ -6,7 +6,7 @@ Converts normalized filters to MongoDB aggregation pipeline.
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +44,8 @@ class MongoQueryTranslator:
         self.grouped_documents_limit = grouped_documents_limit
 
     def translate(
-        self, filters: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> List[Dict[str, Any]]:
+        self, filters: dict[str, Any], model_info: dict[str, Any]
+    ) -> list[dict[str, Any]]:
         """
         Convert QueryFilters to MongoDB aggregation pipelines.
 
@@ -59,7 +59,7 @@ class MongoQueryTranslator:
         if not filters or "filters" not in filters:
             return [{"pipeline": []}]
 
-        mongo_queries: List[Dict[str, Any]] = []
+        mongo_queries: list[dict[str, Any]] = []
 
         for filter_slice in filters["filters"]:
             mongo_query = self._translate_slice(filter_slice, model_info)
@@ -68,10 +68,10 @@ class MongoQueryTranslator:
         return mongo_queries
 
     def _translate_slice(
-        self, filter_slice: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> Dict[str, Any]:
+        self, filter_slice: dict[str, Any], model_info: dict[str, Any]
+    ) -> dict[str, Any]:
         """Translate a single query slice to MongoDB aggregation pipeline."""
-        pipeline: List[Dict[str, Any]] = []
+        pipeline: list[dict[str, Any]] = []
 
         # Build $match stage from conditions
         match_conditions = []
@@ -87,8 +87,8 @@ class MongoQueryTranslator:
                 pipeline.append({"$match": {"$and": match_conditions}})
 
         is_grouped = bool(filter_slice.get("group_by"))
-        agg_result_names: Dict[str, str] = {}  # original field path -> aggregation result name
-        group_by_fields: List[str] = list(filter_slice.get("group_by") or [])
+        agg_result_names: dict[str, str] = {}  # original field path -> aggregation result name
+        group_by_fields: list[str] = list(filter_slice.get("group_by") or [])
 
         # Process group_by and aggregations
         if is_grouped:
@@ -118,8 +118,8 @@ class MongoQueryTranslator:
         return {"pipeline": pipeline}
 
     def _translate_condition(
-        self, condition: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> Optional[Dict[str, Any]]:
+        self, condition: dict[str, Any], model_info: dict[str, Any]
+    ) -> Optional[dict[str, Any]]:
         """Translate a single condition to MongoDB query clause."""
         field = condition["field"]
         operator = condition["operator"]
@@ -137,10 +137,7 @@ class MongoQueryTranslator:
         elif operator == "isin":
             if isinstance(value, list):
                 # Detect a [start_date, end_date] range using robust ISO parsing
-                if (
-                    len(value) == 2
-                    and all(_looks_like_iso_date(v) for v in value)
-                ):
+                if len(value) == 2 and all(_looks_like_iso_date(v) for v in value):
                     return {field: {"$gte": value[0], "$lte": value[1]}}
                 return {field: {"$in": value}}
             return {field: {"$eq": value}}
@@ -162,8 +159,8 @@ class MongoQueryTranslator:
         return None
 
     def _build_group_stage(
-        self, filter_slice: Dict[str, Any], model_info: Dict[str, Any]
-    ) -> tuple[Dict[str, Any], Dict[str, str]]:
+        self, filter_slice: dict[str, Any], model_info: dict[str, Any]
+    ) -> tuple[dict[str, Any], dict[str, str]]:
         """
         Build MongoDB $group stage from group_by and aggregations.
 
@@ -180,10 +177,14 @@ class MongoQueryTranslator:
             if field_type == "date":
                 interval = filter_slice.get("interval", "month")
 
-                # Convert string date to Date object, then format
+                # Coerce to a Date regardless of whether the field is stored as
+                # a BSON Date or an ISO string. $convert with onError/onNull
+                # avoids the silent grouping-into-null bucket that
+                # $dateFromString alone causes for already-typed dates.
                 date_conversion = {
-                    "$dateFromString": {
-                        "dateString": f"${gf}",
+                    "$convert": {
+                        "input": f"${gf}",
+                        "to": "date",
                         "onError": None,
                         "onNull": None,
                     }
@@ -196,21 +197,17 @@ class MongoQueryTranslator:
                     "year": "%Y",
                 }
                 fmt = format_map.get(interval, "%Y-%m")
-                group_id[gf] = {
-                    "$dateToString": {"format": fmt, "date": date_conversion}
-                }
+                group_id[gf] = {"$dateToString": {"format": fmt, "date": date_conversion}}
             else:
                 group_id[gf] = f"${gf}"
 
-        group_stage: Dict[str, Any] = {"$group": {"_id": group_id}}
-        agg_result_names: Dict[str, str] = {}
+        group_stage: dict[str, Any] = {"$group": {"_id": group_id}}
+        agg_result_names: dict[str, str] = {}
 
         # Add aggregation fields
         if filter_slice.get("aggregations"):
             for agg in filter_slice["aggregations"]:
-                agg_field_name = (
-                    f"{agg['type'].lower()}_{agg['field'].replace('.', '_')}"
-                )
+                agg_field_name = f"{agg['type'].lower()}_{agg['field'].replace('.', '_')}"
                 agg_result_names[agg["field"]] = agg_field_name
                 field_for_agg = agg["field"]
 
@@ -238,9 +235,9 @@ class MongoQueryTranslator:
 
     def _build_having_conditions(
         self,
-        filter_slice: Dict[str, Any],
-        agg_result_names: Dict[str, str],
-    ) -> Optional[Dict[str, Any]]:
+        filter_slice: dict[str, Any],
+        agg_result_names: dict[str, str],
+    ) -> Optional[dict[str, Any]]:
         """Build having conditions for post-aggregation filtering."""
         if not filter_slice.get("aggregations"):
             return None
@@ -273,11 +270,11 @@ class MongoQueryTranslator:
 
     def _build_sort_spec(
         self,
-        sort_entries: List[Dict[str, Any]],
+        sort_entries: list[dict[str, Any]],
         is_grouped: bool,
-        group_by_fields: List[str],
-        agg_result_names: Dict[str, str],
-    ) -> Dict[str, int]:
+        group_by_fields: list[str],
+        agg_result_names: dict[str, str],
+    ) -> dict[str, int]:
         """
         Build $sort spec, remapping field names to their post-group output names.
 
@@ -285,7 +282,7 @@ class MongoQueryTranslator:
         and the aggregation result names. Sorting by a raw schema field after $group
         is a no-op, so we drop those entries and warn.
         """
-        sort_spec: Dict[str, int] = {}
+        sort_spec: dict[str, int] = {}
         for s in sort_entries:
             field = s["field"]
             direction = 1 if s.get("order", "asc") == "asc" else -1
